@@ -1,13 +1,21 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:colorPrimary">#0EA5E9</item>
-        <item name="android:colorPrimaryDark">#0284C7</item>
-        <item name="android:colorAccent">#8B5CF6</item>
-        <item name="android:windowBackground">#070B18</item>
-        <item name="android:statusBarColor">#070B18</item>
-        <item name="android:navigationBarColor">#070B18</item>
-        <item name="android:textColorPrimary">#F1F5FF</item>
-        <item name="android:textColorSecondary">#8E9AB8</item>
-    </style>
+<!--  Tema dasar GELAP: popup spinner, dialog, dan teks otomatis terbaca di latar gelap.  -->
+<style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+<item name="android:colorPrimary">#0EA5E9</item>
+<item name="android:colorPrimaryDark">@color/bg0</item>
+<item name="android:colorAccent">@color/cyan</item>
+<item name="android:colorControlActivated">@color/cyan</item>
+<item name="android:windowBackground">@color/bg0</item>
+<item name="android:statusBarColor">@color/bg0</item>
+<item name="android:navigationBarColor">@color/bg0</item>
+<item name="android:textColorPrimary">@color/text</item>
+<item name="android:textColorSecondary">@color/mute</item>
+<item name="android:alertDialogTheme">@style/AppDialog</item>
+</style>
+<style name="AppDialog" parent="android:Theme.Material.Dialog.Alert">
+<item name="android:windowBackground">@drawable/dialog_bg</item>
+<item name="android:colorAccent">@color/cyan</item>
+<item name="android:textColorPrimary">@color/text</item>
+<item name="android:textColorSecondary">@color/mute</item>
+</style>
 </resources>
