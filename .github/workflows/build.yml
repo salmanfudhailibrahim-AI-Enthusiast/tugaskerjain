@@ -1,5 +1,10 @@
-name: Build APK
-on: [push, workflow_dispatch]
+name: Build & Release APK
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -11,6 +16,23 @@ jobs:
         with: { packages: 'platforms;android-34 build-tools;34.0.0' }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: 8.7 }
-      - run: gradle assembleDebug --no-daemon --stacktrace --console=plain
+      - name: Siapkan keystore
+        env:
+          KS: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/update.jks"
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/update.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Secret KEYSTORE_B64 belum diisi. APK memakai kunci debug acak, jadi update dari versi sebelumnya tidak bisa dipasang."
+          fi
+      - run: gradle assembleRelease -PverCode=${{ github.run_number }} -PrepoSlug=${{ github.repository }} --no-daemon --stacktrace --console=plain
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      - run: cp app/build/outputs/apk/release/app-release.apk PemantauTugas.apk
       - uses: actions/upload-artifact@v4
-        with: { name: PemantauTugas-APK, path: app/build/outputs/apk/debug/app-debug.apk }
+        with: { name: PemantauTugas-APK, path: PemantauTugas.apk }
+      - name: Terbitkan rilis (dibaca oleh fitur update di aplikasi)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v${{ github.run_number }}" PemantauTugas.apk --title "Versi ${{ github.run_number }}" --notes "$(git log -1 --pretty=%B)" --latest
