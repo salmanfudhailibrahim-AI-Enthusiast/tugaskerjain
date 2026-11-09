@@ -38,6 +38,66 @@ jobs:
           fi
           echo "KEYSTORE_PATH=$RUNNER_TEMP/update.jks" >> "$GITHUB_ENV"
           echo "Keystore valid, APK akan ditandatangani dengan kunci tetap."
+      - name: Periksa struktur project (perbaiki otomatis jika app/build.gradle.kts salah)
+        shell: bash
+        run: |
+          echo "--- file Gradle di repo ---"
+          find . -name "*.gradle.kts" -not -path "./.git/*" | sort
+          echo "--- app/build.gradle.kts (5 baris pertama) ---"
+          head -5 app/build.gradle.kts 2>/dev/null || echo "(tidak ada)"
+          if ! grep -q 'id("com.android.application")' app/build.gradle.kts 2>/dev/null || grep -q 'apply false' app/build.gradle.kts; then
+            echo "::warning::app/build.gradle.kts bukan konfigurasi modul Android. Menggantinya dengan versi yang benar."
+            mkdir -p app
+            cat > app/build.gradle.kts <<'GRADLE'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          val verCode = (project.findProperty("verCode") as String?)?.toIntOrNull() ?: 1
+          val repoSlug = (project.findProperty("repoSlug") as String?) ?: ""
+          val ksPath: String? = System.getenv("KEYSTORE_PATH")
+
+          android {
+              namespace = "id.pemantau.tugas"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "id.pemantau.tugas"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = verCode
+                  versionName = "1.$verCode"
+                  resValue("string", "repo_slug", repoSlug)
+              }
+              signingConfigs {
+                  if (ksPath != null && file(ksPath).exists()) {
+                      create("ci") {
+                          storeFile = file(ksPath)
+                          storePassword = System.getenv("KEYSTORE_PASSWORD")
+                          keyAlias = "key0"
+                          keyPassword = System.getenv("KEYSTORE_PASSWORD")
+                      }
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig = signingConfigs.findByName("ci") ?: signingConfigs.getByName("debug")
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+              lint { abortOnError = false; checkReleaseBuilds = false }
+          }
+          dependencies { implementation("androidx.work:work-runtime-ktx:2.9.1") }
+          GRADLE
+          fi
+          if [ ! -f app/src/main/AndroidManifest.xml ]; then
+            echo "::error::app/src/main/AndroidManifest.xml tidak ada. Pastikan isi folder app/src dari zip hasil perbaikan sudah ikut di-push."
+            exit 1
+          fi
       - name: Build APK (diulang hanya jika unduhan dependency gagal karena jaringan)
         shell: bash
         env:
