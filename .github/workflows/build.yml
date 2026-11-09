@@ -19,16 +19,35 @@ jobs:
       - name: Siapkan keystore
         env:
           KS: ${{ secrets.KEYSTORE_B64 }}
+          KSPW: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
-          if [ -n "$KS" ]; then
-            echo "$KS" | base64 -d > "$RUNNER_TEMP/update.jks"
-            echo "KEYSTORE_PATH=$RUNNER_TEMP/update.jks" >> "$GITHUB_ENV"
-          else
+          # Tidak pernah menggagalkan build: kalau keystore bermasalah, pakai kunci debug dan beri peringatan.
+          set +e
+          if [ -z "$KS" ]; then
             echo "::warning::Secret KEYSTORE_B64 belum diisi. APK memakai kunci debug acak, jadi update dari versi sebelumnya tidak bisa dipasang."
+            exit 0
           fi
-      - run: gradle assembleRelease -PverCode=${{ github.run_number }} -PrepoSlug=${{ github.repository }} --no-daemon --stacktrace --console=plain
+          printf '%s' "$KS" | tr -d ' \n\r\t' | base64 -d > "$RUNNER_TEMP/update.jks" 2>/dev/null
+          if [ $? -ne 0 ] || [ ! -s "$RUNNER_TEMP/update.jks" ]; then
+            echo "::warning::Isi secret KEYSTORE_B64 bukan base64 yang valid. Salin ulang HANYA hasil perintah base64 dari update.jks (satu baris panjang). Build memakai kunci debug."
+            exit 0
+          fi
+          if ! keytool -list -keystore "$RUNNER_TEMP/update.jks" -storepass "$KSPW" -alias key0 > /dev/null 2>&1; then
+            echo "::warning::Keystore terbaca, tetapi KEYSTORE_PASSWORD salah atau alias bukan key0. Build memakai kunci debug."
+            exit 0
+          fi
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/update.jks" >> "$GITHUB_ENV"
+          echo "Keystore valid, APK akan ditandatangani dengan kunci tetap."
+      - name: Build APK (otomatis diulang jika unduhan dependency gagal)
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          for i in 1 2 3; do
+            gradle assembleRelease -PverCode=${{ github.run_number }} -PrepoSlug=${{ github.repository }} --no-daemon --stacktrace --console=plain && exit 0
+            echo "::warning::Build gagal pada percobaan $i dari 3. Mengulang dalam 30 detik..."
+            sleep 30
+          done
+          exit 1
       - run: cp app/build/outputs/apk/release/app-release.apk PemantauTugas.apk
       - uses: actions/upload-artifact@v4
         with: { name: PemantauTugas-APK, path: PemantauTugas.apk }
