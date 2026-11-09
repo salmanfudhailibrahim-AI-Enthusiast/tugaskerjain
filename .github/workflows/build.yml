@@ -38,14 +38,23 @@ jobs:
           fi
           echo "KEYSTORE_PATH=$RUNNER_TEMP/update.jks" >> "$GITHUB_ENV"
           echo "Keystore valid, APK akan ditandatangani dengan kunci tetap."
-      - name: Build APK (otomatis diulang jika unduhan dependency gagal)
+      - name: Build APK (diulang hanya jika unduhan dependency gagal karena jaringan)
+        shell: bash
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
+          set +e
           for i in 1 2 3; do
-            gradle assembleRelease -PverCode=${{ github.run_number }} -PrepoSlug=${{ github.repository }} --no-daemon --stacktrace --console=plain && exit 0
-            echo "::warning::Build gagal pada percobaan $i dari 3. Mengulang dalam 30 detik..."
-            sleep 30
+            gradle assembleRelease -PverCode=${{ github.run_number }} -PrepoSlug=${{ github.repository }} --no-daemon --stacktrace --console=plain 2>&1 | tee build.log
+            code=${PIPESTATUS[0]}
+            [ "$code" -eq 0 ] && exit 0
+            if grep -q -E "Could not (resolve|GET|HEAD)|Connection (reset|timed out)|Read timed out|Premature end|Received status code 5" build.log; then
+              echo "::warning::Build gagal karena jaringan pada percobaan $i dari 3. Mengulang dalam 30 detik..."
+              sleep 30
+            else
+              echo "::error::Build gagal (bukan masalah jaringan), jadi tidak diulang. Lihat pesan error di atas."
+              exit "$code"
+            fi
           done
           exit 1
       - run: cp app/build/outputs/apk/release/app-release.apk PemantauTugas.apk
@@ -54,4 +63,6 @@ jobs:
       - name: Terbitkan rilis (dibaca oleh fitur update di aplikasi)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v${{ github.run_number }}" PemantauTugas.apk --title "Versi ${{ github.run_number }}" --notes "$(git log -1 --pretty=%B)" --latest
+        run: |
+          gh release delete "v${{ github.run_number }}" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "v${{ github.run_number }}" PemantauTugas.apk --title "Versi ${{ github.run_number }}" --notes "$(git log -1 --pretty=%B)" --latest
