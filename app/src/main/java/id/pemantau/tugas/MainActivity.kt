@@ -3,21 +3,28 @@ package id.pemantau.tugas
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
-import android.widget.*
+import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.CheckBox
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Spinner
+import android.widget.TextView
+import android.widget.Toast
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -26,18 +33,29 @@ import kotlin.concurrent.thread
 class MainActivity : Activity() {
     private lateinit var list: LinearLayout
     private lateinit var status: TextView
-    private lateinit var stats: LinearLayout
-    private lateinit var tabViews: List<TextView>
+    private lateinit var navViews: List<TextView>
     private val ui = Handler(Looper.getMainLooper())
     private var fromLogin = false
-    private var tab = 0
     private var built = false
+    private var tab = 0 // 0 Tugas, 1 Kuliah, 2 AI Studio
+
+    // ---- AI Studio ----
+    private var sMode = 0      // 0 ringkas, 1 latihan soal, 2 kerjakan tugas
+    private var sCourse = 0    // 0 = tanpa mata kuliah, n = urutan ke-n di daftar
+    private var sTask = 0      // 0 = tulis sendiri, n = tugas ke-n
+    private var sTopic = ""
+    private var sPaste = ""
+    private var sPdfs: List<Att> = emptyList()
+    private val sOn = mutableSetOf<Int>()
+    private var sBusy = false
     private val picked = mutableListOf<Att>()
-    private var pickedInfo: TextView? = null
+
+    // ---- Kumpulkan tugas ----
+    private val subFiles = mutableListOf<Att>()
+    private var subInfo: TextView? = null
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
-        window.statusBarColor = Pal.blue
         prefs().let { if (!it.contains("baseUrl")) it.edit().putString("baseUrl", "https://elita.untidar.ac.id").putString("ssoUrl", "https://sso.untidar.ac.id/Home/Login").apply() }
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         if (prefs().getBoolean("onboarded", false)) buildMain() else onboarding()
@@ -49,61 +67,42 @@ class MainActivity : Activity() {
         if (fromLogin) { fromLogin = false; sync() } else render()
     }
 
-    /* ---------------- Lampiran PDF ---------------- */
+    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
+
     override fun onActivityResult(req: Int, res: Int, d: Intent?) {
         super.onActivityResult(req, res, d)
-        if (req != 77 || res != RESULT_OK || d == null) return
+        if ((req != 77 && req != 78) || res != RESULT_OK || d == null) return
         val uris = ArrayList<Uri>(); val cd = d.clipData
         if (cd != null) for (i in 0 until cd.itemCount) uris += cd.getItemAt(i).uri else d.data?.let { uris += it }
         uris.forEach { u ->
             val nm = contentResolver.query(u, null, null, null, null)?.use { cur ->
-                val i = cur.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                val i = cur.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                 if (cur.moveToFirst() && i >= 0) cur.getString(i) else null
-            } ?: "PDF"
-            picked += Att(nm, uri = u)
+            } ?: "berkas"
+            if (req == 77) picked += Att(nm, uri = u) else subFiles += Att(nm, uri = u)
         }
-        refreshInfo()
+        if (req == 77) render() else refreshSub()
     }
-
-    private fun refreshInfo() { pickedInfo?.text = if (picked.isEmpty()) "Belum ada PDF dilampirkan" else picked.joinToString("\n") { "📄 " + it.name } }
 
     private fun pickPdf() = startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
         .setType("application/pdf").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), 77)
 
-    private fun campusPdfs(cid: Long) {
-        Toast.makeText(this, "Mengambil daftar berkas...", Toast.LENGTH_SHORT).show()
-        thread {
-            val l = try { Campus.coursePdfs(this, cid) } catch (e: Exception) { ui.post { Toast.makeText(this, "Gagal: ${e.message}", Toast.LENGTH_LONG).show() }; return@thread }
-            ui.post {
-                if (l.isEmpty()) { Toast.makeText(this, "Tidak ada berkas materi ditemukan. Pakai 'Dari HP' atau tempel teks.", Toast.LENGTH_LONG).show(); return@post }
-                val on = BooleanArray(l.size)
-                AlertDialog.Builder(this).setTitle("Pilih berkas materi")
-                    .setMultiChoiceItems(l.map { it.name }.toTypedArray(), on) { _, i, v -> on[i] = v }
-                    .setPositiveButton("Pilih") { _, _ -> l.forEachIndexed { i, a -> if (on[i] && picked.none { it.url == a.url }) picked += a }; refreshInfo() }
-                    .setNegativeButton("Batal", null).show()
-            }
-        }
+    private fun pickAny() = startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+        .setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), 78)
+
+    private fun refreshSub() { subInfo?.text = if (subFiles.isEmpty()) "Belum ada file dilampirkan" else subFiles.joinToString("\n") { "📄 " + it.name } }
+
+    private fun openPdf(a: Att) {
+        val i = Intent(this, PdfActivity::class.java).putExtra("name", a.name)
+        a.url?.let { i.putExtra("url", it) }
+        a.uri?.let { i.putExtra("uri", it.toString()) }
+        startActivity(i)
     }
 
-    /** Kotak lampiran PDF: pilih dari HP, dari web kampus (jika mata kuliah diketahui), atau kosongkan. */
-    private fun attachBox(cid: Long): LinearLayout {
-        picked.clear()
-        val info = tv("", 12f, Pal.mute).apply { setPadding(0, dp(8), 0, 0) }
-        pickedInfo = info; refreshInfo()
-        val btns = mutableListOf<TextView>(pill("📎 Dari HP", Pal.soft, Pal.ink) { pickPdf() })
-        if (cid != 0L) btns += pill("🏫 Dari kampus", Pal.soft, Pal.ink) { campusPdfs(cid) }
-        btns += pill("✕", Pal.soft, Pal.red) { picked.clear(); refreshInfo() }
-        return LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(row(*btns.toTypedArray())); addView(info) }
-    }
-
-    /* ---------------- Layar sambutan (pertama kali dibuka) ---------------- */
+    /* ---------------- Layar sambutan ---------------- */
     private fun onboarding() {
-        val bg = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(Pal.blue, Pal.violet))
-        val key = EditText(this).apply {
-            hint = "Tempel API key Anthropic kamu (sk-ant-...)"; setSingleLine()
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setTextColor(Pal.ink); setHintTextColor(0xFF8A93A6.toInt())
-            background = shape(Color.WHITE, 14); setPadding(dp(14), dp(12), dp(14), dp(12))
+        val key = field("Tempel API key Anthropic kamu (sk-ant-...)").apply {
+            setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         fun finish(save: Boolean) {
             val e = prefs().edit().putBoolean("onboarded", true)
@@ -111,63 +110,56 @@ class MainActivity : Activity() {
             e.apply(); buildMain()
         }
         val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; background = bg; setPadding(dp(24), dp(72), dp(24), dp(24))
-            addView(tv("📚", 48f))
-            addView(tv("Selamat datang di Tugas Kampus", 28f, Color.WHITE, true).apply { setPadding(0, dp(8), 0, dp(8)) })
-            addView(tv("Pantau deadline, ringkas materi tiap mata kuliah, dan minta AI menyusun draf jawaban tugasmu.", 15f, 0xE6FFFFFF.toInt()))
-            addView(tv("1. Login kampus (SSO) dari beranda\n2. Masukkan API key milikmu sendiri di bawah. Disimpan hanya di HP ini.\n3. Tekan Sinkron, lalu ringkas atau kerjakan dengan AI", 14f, Color.WHITE).apply { setPadding(0, dp(20), 0, dp(20)) })
+            orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(72), dp(24), dp(24))
+            addView(tv("TUGAS KAMPUS", 12f, Pal.cyan, true).apply { letterSpacing = 0.25f })
+            addView(tv("Kuliah, tapi\nlebih cerdas.", 34f, Pal.text, true).apply { setPadding(0, dp(8), 0, dp(12)) })
+            addView(tv("Pantau deadline, baca PDF materi, ringkas per mata kuliah, dan minta AI menyusun draf jawaban. Semua dari satu tempat.", 15f, Pal.mute))
+            addView(card().apply {
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+                addView(tv("1  Login kampus dari beranda (🔐)\n2  Masukkan API key milikmu di bawah\n3  Sinkron ↻, lalu buka AI Studio ✨", 14f, Pal.text))
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(24) })
             addView(key, LinearLayout.LayoutParams(-1, -2))
-            addView(tv("Biaya pemakaian AI ditanggung API key-mu sendiri.", 12f, 0xCCFFFFFF.toInt()).apply { setPadding(0, dp(6), 0, dp(16)) })
-            addView(pill("Simpan & mulai", Color.WHITE, Pal.blue) { finish(true) }, LinearLayout.LayoutParams(-1, -2))
-            addView(pill("Dapatkan API key", tint(Color.WHITE, 45), Color.WHITE) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.anthropic.com/settings/keys"))) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
-            addView(pill("Lewati dulu", Color.TRANSPARENT, Color.WHITE) { finish(false) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
+            addView(tv("API key hanya disimpan di HP ini. Biaya pemakaian AI ditanggung akun API-mu sendiri.", 12f, Pal.mute).apply { setPadding(0, dp(8), 0, dp(20)) })
+            addView(gpill("Simpan & mulai") { finish(true) }.apply { textSize = 15f; setPadding(0, dp(15), 0, dp(15)) }, LinearLayout.LayoutParams(-1, -2))
+            addView(ghost("Dapatkan API key") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.anthropic.com/settings/keys"))) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+            addView(tv("Lewati dulu", 13f, Pal.mute).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, dp(8)); setOnClickListener { finish(false) } }, LinearLayout.LayoutParams(-1, -2))
         }
-        setContentView(ScrollView(this).apply { setBackgroundColor(Pal.blue); isFillViewport = true; addView(box) })
+        setContentView(ScrollView(this).apply { background = aurora(); isFillViewport = true; addView(box) })
     }
 
-    /* ---------------- Beranda ---------------- */
-    private fun round(s: String, f: () -> Unit) = TextView(this).apply {
-        text = s; textSize = 18f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
-        background = shape(tint(Color.WHITE, 45), 20); setOnClickListener { f() }
-        layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { leftMargin = dp(8) }
+    /* ---------------- Rangka beranda ---------------- */
+    private fun iconBtn(s: String, f: () -> Unit) = TextView(this).apply {
+        text = s; textSize = 17f; setTextColor(Pal.text); gravity = Gravity.CENTER
+        background = shape(Pal.glass, 21, Pal.edge); setOnClickListener { f() }
+        layoutParams = LinearLayout.LayoutParams(dp(42), dp(42)).apply { leftMargin = dp(8) }
     }
 
     private fun buildMain() {
         built = true
-        val g = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(Pal.blue, Pal.violet)).apply {
-            val r = dp(28).toFloat(); cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, r, r, r, r)
+        val top = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(20), dp(40), dp(20), dp(8))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(tv("PANTAU · RINGKAS · KERJAKAN", 10f, Pal.cyan, true).apply { letterSpacing = 0.2f })
+                addView(tv("Tugas Kampus", 26f, Pal.text, true))
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(iconBtn("↻") { sync() })
+            addView(iconBtn("🔐") { fromLogin = true; startActivity(Intent(this@MainActivity, LoginActivity::class.java)) })
+            addView(iconBtn("⚙") { settings() })
         }
-        val head = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = g; setPadding(dp(20), dp(24), dp(20), dp(20)) }
-        val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        val titles = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(tv("Tugas Kampus", 26f, Color.WHITE, true))
-            addView(tv("Pantau · Ringkas · Kerjakan", 12f, 0xCCFFFFFF.toInt()))
+        status = tv("", 12f, Pal.mute).apply { setPadding(dp(20), 0, dp(20), dp(6)) }
+        list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(16)) }
+        val nav = LinearLayout(this).apply { background = shape(0xE6121830.toInt(), 28, Pal.edge); setPadding(dp(6), dp(6), dp(6), dp(6)) }
+        navViews = listOf("🏠" to "Tugas", "📚" to "Kuliah", "✨" to "AI Studio").mapIndexed { i, (e, l) ->
+            TextView(this).apply { text = "$e\n$l"; gravity = Gravity.CENTER; textSize = 11f; setPadding(0, dp(8), 0, dp(8)); setOnClickListener { tab = i; render() } }
         }
-        top.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
-        top.addView(round("↻") { sync() })
-        top.addView(round("🔐") { fromLogin = true; startActivity(Intent(this, LoginActivity::class.java)) })
-        top.addView(round("⚙") { settings() })
-        head.addView(top)
-        stats = LinearLayout(this).apply { setPadding(0, dp(16), 0, 0) }
-        head.addView(stats)
-        status = tv("", 12f, 0xCCFFFFFF.toInt()).apply { setPadding(0, dp(10), 0, 0) }
-        head.addView(status)
-
-        val seg = LinearLayout(this).apply { background = shape(Pal.soft, 22); setPadding(dp(4), dp(4), dp(4), dp(4)) }
-        tabViews = listOf("Tugas", "Mata kuliah").mapIndexed { i, s ->
-            TextView(this).apply { text = s; gravity = Gravity.CENTER; textSize = 14f; setPadding(0, dp(10), 0, dp(10)); setOnClickListener { tab = i; render() } }
-        }
-        tabViews.forEach { seg.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
-
-        list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(24)) }
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setBackgroundColor(Pal.bg)
-            addView(head)
-            addView(seg, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(16), dp(16), dp(16), dp(4)) })
-            addView(ScrollView(this@MainActivity).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        }
-        setContentView(root)
+        navViews.forEach { nav.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
+        setContentView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; background = aurora()
+            addView(top); addView(status)
+            addView(ScrollView(this@MainActivity).apply { isVerticalScrollBarEnabled = false; addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(nav, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(16), dp(4), dp(16), dp(16)) })
+        })
         Sync.periodic(this)
         render()
         thread { Updater.refresh(this, false); ui.post { render() } }
@@ -175,158 +167,352 @@ class MainActivity : Activity() {
 
     private fun sync() { status.text = "Menyinkronkan..."; thread { Sync.run(this); ui.post { render() } } }
 
-    private fun stat(n: Int, label: String, c: Int) = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
-        background = shape(tint(Color.WHITE, 40), 16); setPadding(0, dp(10), 0, dp(10))
-        addView(tv("$n", 22f, c, true).apply { gravity = Gravity.CENTER })
-        addView(tv(label, 11f, Color.WHITE).apply { gravity = Gravity.CENTER })
-        layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) }
-    }
-
     private fun render() {
         val p = prefs(); val err = p.str("error"); val ls = p.getLong("lastSync", 0)
-        status.text = if (err.isNotEmpty()) err else if (ls > 0) "Terakhir dicek " + SimpleDateFormat("HH:mm", Locale.forLanguageTag("id-ID")).format(Date(ls)) else "Tekan 🔐 untuk login kampus (atau isi token di ⚙), lalu ↻ Sinkron."
-        status.setTextColor(if (err.isNotEmpty()) 0xFFFFD6D6.toInt() else 0xCCFFFFFF.toInt())
-        val done = p.getStringSet("done", emptySet())!!; val now = System.currentTimeMillis()
-        val tasks = loadTasks(this)
-        val active = tasks.filter { it.id !in done }
-        stats.removeAllViews()
-        stats.addView(stat(active.size, "Aktif", Color.WHITE))
-        stats.addView(stat(active.count { it.due >= now && it.due - now < 86400000L }, "< 24 jam", 0xFFFFE08A.toInt()))
-        stats.addView(stat(active.count { it.due < now }, "Terlambat", 0xFFFFB4B4.toInt()))
-        tabViews.forEachIndexed { i, t ->
+        status.text = if (err.isNotEmpty()) err else if (ls > 0) "Terakhir dicek " + SimpleDateFormat("HH:mm", Locale.forLanguageTag("id-ID")).format(Date(ls)) else "Tekan 🔐 untuk login kampus (atau isi token di ⚙), lalu ↻ untuk sinkron."
+        status.setTextColor(if (err.isNotEmpty()) Pal.red else Pal.mute)
+        navViews.forEachIndexed { i, t ->
             val on = i == tab
-            t.background = if (on) shape(Color.WHITE, 18) else null
-            t.setTextColor(if (on) Pal.ink else Pal.mute); t.setTypeface(null, if (on) Typeface.BOLD else Typeface.NORMAL)
+            t.background = if (on) grad(20) else null
+            t.setTextColor(if (on) Color.WHITE else Pal.mute)
+            t.setTypeface(null, if (on) Typeface.BOLD else Typeface.NORMAL)
         }
         list.removeAllViews()
         Updater.pending(this)?.let { list.addView(updateCard(it)) }
-        if (tab == 0) renderTasks(tasks, done, now) else renderCourses(tasks)
-    }
-
-    private fun updateCard(i: Updater.Info) = card().apply {
-        background = shape(tint(Pal.green, 28), 20)
-        addView(tv("⬆️ Pembaruan tersedia (versi ${i.code})", 15f, Pal.green, true))
-        if (i.notes.isNotBlank()) addView(tv(i.notes.trim().take(160), 12f, Pal.mute).apply { setPadding(0, dp(4), 0, 0) })
-        addView(row(pill("Perbarui sekarang", Pal.green, Color.WHITE) { startUpdate(i) }))
-    }
-
-    private fun startUpdate(i: Updater.Info) {
-        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
-            Toast.makeText(this, "Izinkan 'Pasang aplikasi tidak dikenal' untuk aplikasi ini, lalu tekan Perbarui lagi.", Toast.LENGTH_LONG).show()
-            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
-            return
-        }
-        val dlg = AlertDialog.Builder(this).setTitle("Pembaruan").setMessage("Mengunduh versi ${i.code}...").setCancelable(false).show()
-        thread {
-            val err = try { Updater.install(this, i.url); null } catch (e: Exception) { e.message ?: "gagal" }
-            ui.post { dlg.dismiss(); if (err != null) Toast.makeText(this, "Gagal memperbarui: $err", Toast.LENGTH_LONG).show() }
-        }
+        when (tab) { 0 -> renderTasks(); 1 -> renderCourses(); else -> renderStudio() }
     }
 
     private fun empty(emoji: String, msg: String) {
-        list.addView(tv(emoji, 44f).apply { gravity = Gravity.CENTER; setPadding(0, dp(40), 0, dp(8)) }, LinearLayout.LayoutParams(-1, -2))
+        list.addView(tv(emoji, 44f).apply { gravity = Gravity.CENTER; setPadding(0, dp(36), 0, dp(8)) }, LinearLayout.LayoutParams(-1, -2))
         list.addView(tv(msg, 14f, Pal.mute).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, -2))
     }
 
-    private fun renderTasks(all: List<Task>, done: Set<String>, now: Long) {
-        val tasks = all.sortedBy { it.id in done }
-        if (tasks.isEmpty()) { empty("🎉", "Belum ada tugas aktif."); return }
-        tasks.forEach { list.addView(row(it, it.id in done, now)) }
+    private fun courses() = loadCourses(this)
+
+    /* ---------------- Tab Tugas ---------------- */
+    private fun stat(n: Int, label: String, c: Int) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+        background = shape(Pal.glass, 18, Pal.edge); setPadding(0, dp(12), 0, dp(12))
+        addView(tv("$n", 26f, c, true).apply { gravity = Gravity.CENTER })
+        addView(tv(label, 10f, Pal.mute, true).apply { gravity = Gravity.CENTER; letterSpacing = 0.12f })
+        layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) }
     }
 
-    private fun row(t: Task, isDone: Boolean, now: Long): android.view.View {
+    private fun renderTasks() {
+        val p = prefs(); val done = p.getStringSet("done", emptySet())!!; val now = System.currentTimeMillis()
+        val all = loadTasks(this); val active = all.filter { it.id !in done }
+        val st = LinearLayout(this)
+        st.addView(stat(active.size, "AKTIF", Pal.cyan))
+        st.addView(stat(active.count { it.due >= now && it.due - now < 86400000L }, "< 24 JAM", Pal.amber))
+        st.addView(stat(active.count { it.due < now }, "TERLAMBAT", Pal.red))
+        list.addView(st, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+        if (all.isNotEmpty()) {
+            val finished = all.size - active.size
+            val frac = finished.toFloat() / all.size
+            list.addView(card().apply {
+                addView(tv("$finished dari ${all.size} tugas selesai", 12f, Pal.mute))
+                addView(LinearLayout(this@MainActivity).apply {
+                    background = shape(tint(Color.WHITE, 22), 6)
+                    addView(View(this@MainActivity).apply { background = grad(6) }, LinearLayout.LayoutParams(0, dp(8), frac))
+                    addView(View(this@MainActivity), LinearLayout.LayoutParams(0, dp(8), 1f - frac))
+                }, LinearLayout.LayoutParams(-1, dp(8)).apply { topMargin = dp(8) })
+            })
+        }
+        val tasks = all.sortedBy { it.id in done }
+        if (tasks.isEmpty()) { empty("🎉", "Belum ada tugas aktif.\nTekan 🔐 untuk login kampus, lalu ↻ untuk sinkron."); return }
+        tasks.forEach { list.addView(taskCard(it, it.id in done, now)) }
+    }
+
+    private fun taskCard(t: Task, isDone: Boolean, now: Long): View {
         val late = t.due < now; val soon = !late && t.due - now < 86400000L
         val (label, col) = when {
-            isDone -> "Selesai" to Pal.green
-            late -> "Terlambat" to Pal.red
-            soon -> ("Sisa " + left(t.due - now)) to Pal.amber
-            else -> (left(t.due - now) + " lagi") to Pal.blue
+            isDone -> "SELESAI" to Pal.green
+            late -> "TERLAMBAT" to Pal.red
+            soon -> ("SISA " + left(t.due - now).uppercase()) to Pal.amber
+            else -> (left(t.due - now).uppercase() + " LAGI") to Pal.cyan
         }
         val fmt = SimpleDateFormat("EEEE, d MMM HH:mm", Locale.forLanguageTag("id-ID"))
         return card().apply {
-            alpha = if (isDone) .6f else 1f
+            alpha = if (isDone) .55f else 1f
             addView(chip(label, col), LinearLayout.LayoutParams(-2, -2))
-            addView(tv(t.title, 16f, Pal.ink, true).apply { setPadding(0, dp(8), 0, 0) })
+            addView(tv(t.title, 16f, Pal.text, true).apply { setPadding(0, dp(8), 0, 0) })
             addView(tv(t.course, 12f, Pal.mute))
             addView(tv("⏰ " + fmt.format(Date(t.due)), 13f, col).apply { setPadding(0, dp(4), 0, 0) })
-            addView(row(pill("✨ Ringkas", tint(Pal.blue, 28), Pal.blue) { ai(t, false) }, pill("🤖 Kerjakan dengan AI", Pal.blue, Color.WHITE) { ai(t, true) }))
-            addView(row(pill("Buka halaman", Pal.soft, Pal.ink) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(t.url))) },
-                pill(if (isDone) "Batal selesai" else "✓ Tandai selesai", Pal.soft, Pal.ink) { toggleDone(t.id) }))
+            addView(row(ghost("✨ Ringkas") { runAi(t) }, gpill("🤖 Kerjakan") { openStudio(2, t.course, t.id) }))
+            addView(row(
+                ghost("📤 Kumpulkan", Pal.green) { submitDialog(t, prefs().str("draft_" + t.id)) },
+                ghost("🌐 Buka") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(t.url))) },
+                ghost(if (isDone) "↩ Batal" else "✓ Selesai") { toggleDone(t.id) }))
         }
     }
 
-    /* ---------------- Tab Mata kuliah ---------------- */
-    private fun renderCourses(tasks: List<Task>) {
-        list.addView(card().apply {
-            addView(tv("📋 Materi sendiri", 16f, Pal.ink, true))
-            addView(tv("Lampirkan PDF dari HP atau tempel teks catatan, AI akan meringkas atau membuat soal latihan.", 12f, Pal.mute))
-            addView(row(pill("Ringkas", tint(Pal.blue, 28), Pal.blue) { courseDialog("", 0, false) }, pill("Latihan soal", tint(Pal.violet, 28), Pal.violet) { courseDialog("", 0, true) }))
-        })
-        val cs = tasks.filter { it.course.isNotBlank() }.groupBy { it.course }
-        if (cs.isEmpty()) { empty("📚", "Mata kuliah muncul setelah sinkron tugas."); return }
-        cs.forEach { (name, ts) ->
-            val cid = ts.firstOrNull { it.courseId != 0L }?.courseId ?: 0L
-            list.addView(card().apply {
-                addView(tv(name, 16f, Pal.ink, true))
-                addView(tv("${ts.size} tugas aktif", 12f, Pal.mute))
-                addView(row(pill("📚 Ringkas materi", Pal.blue, Color.WHITE) { courseDialog(name, cid, false) }, pill("📝 Latihan soal", Pal.violet, Color.WHITE) { courseDialog(name, cid, true) }))
-            })
-        }
-    }
-
-    private fun courseDialog(course: String, cid: Long, quiz: Boolean) {
-        val topic = EditText(this).apply { hint = "Topik/pertemuan (opsional), mis. Pertemuan 5" }
-        val paste = EditText(this).apply { hint = "Tempel materi sendiri (opsional)"; minLines = 4; gravity = Gravity.TOP }
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0); addView(topic); addView(paste); addView(attachBox(cid)) }
-        val title = (if (quiz) "Latihan soal" else "Ringkas materi") + if (course.isBlank()) "" else ": $course"
-        AlertDialog.Builder(this).setTitle(title).setView(ScrollView(this).apply { addView(box) })
-            .setPositiveButton("Mulai") { _, _ -> runCourse(title, course, cid, quiz, topic.text.toString(), paste.text.toString(), picked.toList()) }
-            .setNegativeButton("Batal", null).show()
-    }
-
-    private fun runCourse(title: String, course: String, cid: Long, quiz: Boolean, topic: String, pasted: String, atts: List<Att>) {
-        val dlg = AlertDialog.Builder(this).setTitle(title).setMessage("Mengambil materi dan menyusun hasil...").show()
-        thread {
-            val out = try { AI.course(this, course, cid, quiz, topic, pasted, atts) } catch (e: Exception) { "Gagal: ${e.message}" }
-            ui.post { dlg.dismiss(); showResult(title, out) }
-        }
-    }
-
-    /* ---------------- Aksi tugas ---------------- */
     private fun toggleDone(id: String) {
         val p = prefs(); val d = p.getStringSet("done", emptySet())!!.toMutableSet()
         if (!d.add(id)) d.remove(id)
         p.edit().putStringSet("done", d).apply(); render()
     }
 
-    private fun ai(t: Task, solve: Boolean) {
-        if (!solve) return runAi(t, false, "")
-        val et = EditText(this).apply { hint = "Instruksi tambahan (opsional), misal: maksimal 500 kata, bahasa formal" }
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0); addView(et); addView(attachBox(t.courseId)) }
-        AlertDialog.Builder(this).setTitle("Kerjakan dengan AI").setView(ScrollView(this).apply { addView(box) })
-            .setPositiveButton("Mulai") { _, _ -> runAi(t, true, et.text.toString(), picked.toList()) }.setNegativeButton("Batal", null).show()
-    }
-
-    private fun runAi(t: Task, solve: Boolean, extra: String, atts: List<Att> = emptyList()) {
-        val dlg = AlertDialog.Builder(this).setTitle(t.title).setMessage(if (solve) "AI sedang mengerjakan tugas..." else "Meringkas...").show()
-        thread {
-            val out = try { AI.run(this, t, solve, extra, atts) } catch (e: Exception) { "Gagal: ${e.message}" }
-            ui.post { dlg.dismiss(); showResult(if (solve) "Draf jawaban" else "Ringkasan", out, if (solve) "Tinjau dan edit dulu, lalu kumpulkan sendiri lewat tombol Buka halaman." else "") }
+    /* ---------------- Tab Kuliah ---------------- */
+    private fun renderCourses() {
+        val cs = courses(); val tasks = loadTasks(this); val done = prefs().getStringSet("done", emptySet())!!
+        list.addView(card().apply {
+            addView(tv("📋 Materi sendiri", 16f, Pal.text, true))
+            addView(tv("Tempel teks atau lampirkan PDF dari HP, lalu minta AI meringkas atau membuat soal.", 12f, Pal.mute))
+            addView(row(ghost("✨ Ringkas") { openStudio(0, "", "") }, ghost("📝 Soal") { openStudio(1, "", "") }))
+        })
+        if (cs.isEmpty()) { empty("📚", "Belum ada mata kuliah.\nTekan 🔐 untuk login, lalu ↻ untuk sinkron."); return }
+        cs.forEach { k ->
+            val n = tasks.count { it.course == k.name && it.id !in done }
+            list.addView(card().apply {
+                addView(tv(k.name, 16f, Pal.text, true))
+                addView(tv(if (n > 0) "$n tugas aktif" else "Tidak ada tugas aktif", 12f, if (n > 0) Pal.amber else Pal.mute))
+                addView(row(ghost("📂 Materi") { materiDialog(k) }, ghost("✨ Ringkas") { openStudio(0, k.name, "") }, gpill("📝 Soal") { openStudio(1, k.name, "") }))
+            })
         }
     }
 
-    private fun showResult(title: String, out: String, note: String = "") {
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(8)) }
-        if (note.isNotEmpty()) col.addView(tv(note, 12f, Pal.amber).apply { setPadding(0, 0, 0, dp(8)) })
-        col.addView(tv(out, 15f).apply { setTextIsSelectable(true) })
-        AlertDialog.Builder(this).setTitle(title).setView(ScrollView(this).apply { addView(col) })
-            .setPositiveButton("Salin") { _, _ ->
-                getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("hasil", out))
-                Toast.makeText(this, "Disalin", Toast.LENGTH_SHORT).show()
+    /** Daftar PDF materi satu mata kuliah; ketuk untuk membuka di pembaca PDF aplikasi. */
+    private fun materiDialog(k: Crs) {
+        toast("Mengambil daftar materi...")
+        thread {
+            val l = try { Campus.coursePdfs(this, k.id) } catch (e: Exception) { ui.post { toast("Gagal: ${e.message}") }; return@thread }
+            ui.post {
+                if (l.isEmpty()) toast("Tidak ada berkas materi ditemukan di mata kuliah ini.")
+                else AlertDialog.Builder(this).setTitle(k.name).setItems(l.map { it.name }.toTypedArray()) { _, i -> openPdf(l[i]) }
+                    .setNegativeButton("Tutup", null).show()
             }
-            .setNeutralButton("Bagikan") { _, _ -> startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, out), null)) }
-            .setNegativeButton("Tutup", null).show()
+        }
+    }
+
+    /* ---------------- Tab AI Studio ---------------- */
+    private fun openStudio(mode: Int, course: String, taskId: String) {
+        sMode = mode
+        sCourse = if (course.isBlank()) 0 else courses().indexOfFirst { it.name == course } + 1
+        sTask = 0
+        if (taskId.isNotEmpty()) {
+            val ts = loadTasks(this).filter { sCourse == 0 || it.course == course }
+            sTask = ts.indexOfFirst { it.id == taskId } + 1
+        }
+        sTopic = ""; sPaste = ""; picked.clear()
+        tab = 2; loadPdfs(); render()
+    }
+
+    /** Daftar PDF mata kuliah terpilih dimuat otomatis; 3 berkas pertama langsung dicentang. */
+    private fun loadPdfs() {
+        val crs = if (sCourse > 0) courses().getOrNull(sCourse - 1) else null
+        sPdfs = emptyList(); sOn.clear()
+        if (crs == null || crs.id == 0L) { sBusy = false; return }
+        sBusy = true
+        thread {
+            val l = try { Campus.coursePdfs(this, crs.id) } catch (e: Exception) { emptyList() }
+            ui.post {
+                sBusy = false
+                if (sCourse > 0 && courses().getOrNull(sCourse - 1)?.id == crs.id) {
+                    sPdfs = l; sOn.clear(); sOn.addAll(l.indices.take(3))
+                    if (tab == 2) render()
+                }
+            }
+        }
+    }
+
+    private fun spinner(items: List<String>, sel: Int, onPick: (Int) -> Unit) = Spinner(this).apply {
+        adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items)
+        setSelection(sel, false)
+        onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) { if (pos != sel) onPick(pos) }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+    }
+
+    private fun renderStudio() {
+        val cs = courses()
+        val names = listOf("— Tanpa mata kuliah (materi sendiri) —") + cs.map { it.name }
+        if (sCourse >= names.size) sCourse = 0
+        val crs = if (sCourse > 0) cs[sCourse - 1] else null
+        val tasks = loadTasks(this).filter { crs == null || it.course == crs.name }
+        if (sTask > tasks.size) sTask = 0
+
+        list.addView(card().apply {
+            addView(label("Mode"))
+            val modes = listOf("✨ Ringkas", "📝 Latihan soal", "🤖 Kerjakan")
+            addView(row(*modes.mapIndexed { i, m -> if (i == sMode) gpill(m) { } else ghost(m) { sMode = i; render() } }.toTypedArray()).apply { setPadding(0, 0, 0, 0) })
+        })
+
+        list.addView(card().apply {
+            addView(label("Mata kuliah"))
+            addView(spinner(names, sCourse) { pos -> sCourse = pos; sTask = 0; loadPdfs(); render() })
+        })
+
+        if (sMode == 2) list.addView(card().apply {
+            addView(label("Tugas yang dikerjakan"))
+            addView(spinner(listOf("✍ Tulis soal/instruksi sendiri") + tasks.map { it.title }, sTask) { pos -> sTask = pos; render() })
+        })
+
+        list.addView(card().apply {
+            if (sMode == 2) {
+                if (sTask == 0) {
+                    addView(label("Soal / instruksi tugas"))
+                    addView(field("Tempel soal atau jelaskan tugasnya").apply { minLines = 4; gravity = Gravity.TOP; setText(sPaste); onText { sPaste = it } })
+                }
+                addView(label("Instruksi tambahan (opsional)").apply { setPadding(0, dp(if (sTask == 0) 12 else 0), 0, dp(6)) })
+                addView(field("mis. maksimal 500 kata, bahasa formal").apply { setText(sTopic); onText { sTopic = it } })
+            } else {
+                addView(label("Topik / pertemuan (opsional)"))
+                addView(field("mis. Pertemuan 5, Bab Normalisasi").apply { setText(sTopic); onText { sTopic = it } })
+                addView(label("Tempel materi sendiri (opsional)").apply { setPadding(0, dp(12), 0, dp(6)) })
+                addView(field("Teks dari slide atau catatan").apply { minLines = 4; gravity = Gravity.TOP; setText(sPaste); onText { sPaste = it } })
+            }
+        })
+
+        list.addView(card().apply {
+            addView(label("Materi PDF"))
+            if (sBusy) addView(tv("Mengambil daftar berkas materi...", 12f, Pal.mute))
+            else if (crs != null && sPdfs.isEmpty()) addView(tv("Tidak ada PDF ditemukan di mata kuliah ini.", 12f, Pal.mute))
+            else if (crs == null) addView(tv("Pilih mata kuliah untuk memuat PDF materi otomatis, atau lampirkan dari HP.", 12f, Pal.mute))
+            sPdfs.forEachIndexed { i, a ->
+                addView(LinearLayout(this@MainActivity).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(CheckBox(this@MainActivity).apply {
+                        text = a.name; setTextColor(Pal.text); textSize = 13f; isChecked = i in sOn
+                        setOnCheckedChangeListener { _, v -> if (v) sOn.add(i) else sOn.remove(i) }
+                    }, LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(tv("👁", 18f).apply { setPadding(dp(10), dp(6), dp(6), dp(6)); setOnClickListener { openPdf(a) } })
+                })
+            }
+            val all = sPdfs.isNotEmpty() && sOn.size == sPdfs.size
+            val btns = mutableListOf<View>(ghost("📎 PDF dari HP") { pickPdf() })
+            if (sPdfs.isNotEmpty()) btns += ghost(if (all) "Kosongkan" else "Pilih semua") { if (all) sOn.clear() else sOn.addAll(sPdfs.indices); render() }
+            addView(row(*btns.toTypedArray()))
+            picked.forEachIndexed { i, a ->
+                addView(tv("📄 ${a.name}   ✕", 12f, Pal.cyan).apply { setPadding(0, dp(8), 0, 0); setOnClickListener { picked.removeAt(i); render() } })
+            }
+            addView(tv("${sOn.size + picked.size} berkas akan dibaca AI (batas total 20 MB, ±100 halaman)", 11f, Pal.mute).apply { setPadding(0, dp(8), 0, 0) })
+        })
+
+        val go = when (sMode) { 0 -> "✨  Ringkas sekarang"; 1 -> "📝  Buat latihan soal"; else -> "🤖  Kerjakan dengan AI" }
+        list.addView(gpill(go) { studioStart() }.apply { textSize = 15f; setPadding(0, dp(16), 0, dp(16)) }, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    private fun studioStart() {
+        val cs = courses(); val crs = if (sCourse > 0) cs.getOrNull(sCourse - 1) else null
+        val atts = sPdfs.filterIndexed { i, _ -> i in sOn } + picked
+        val cname = crs?.name ?: ""; val cid = crs?.id ?: 0L
+        if (sMode == 2) {
+            val tasks = loadTasks(this).filter { crs == null || it.course == crs.name }
+            val t: Task
+            if (sTask == 0) {
+                if (sPaste.isBlank() && atts.isEmpty()) { toast("Tulis soal/instruksi atau lampirkan PDF soal dulu."); return }
+                t = Task("manual", "Tugas", cname, 0L, "", sPaste, cid)
+            } else {
+                t = tasks.getOrNull(sTask - 1) ?: return
+            }
+            runSolve(t, sTopic, atts)
+        } else {
+            if (sPaste.isBlank() && atts.isEmpty() && cid == 0L) { toast("Pilih mata kuliah, lampirkan PDF, atau tempel materi dulu."); return }
+            val quiz = sMode == 1
+            runCourse((if (quiz) "Latihan soal" else "Ringkasan") + if (cname.isBlank()) "" else ": $cname", cname, cid, quiz, sTopic, sPaste, atts)
+        }
+    }
+
+    /* ---------------- Menjalankan AI ---------------- */
+    private fun runCourse(title: String, course: String, cid: Long, quiz: Boolean, topic: String, pasted: String, atts: List<Att>) {
+        val dlg = AlertDialog.Builder(this).setTitle(title).setMessage("Membaca materi dan PDF, lalu menyusun hasil...").show()
+        thread {
+            val out = try { AI.course(this, course, cid, quiz, topic, pasted, atts) } catch (e: Exception) { "Gagal: ${e.message}" }
+            ui.post { dlg.dismiss(); showText(title, out) }
+        }
+    }
+
+    private fun runAi(t: Task) {
+        val dlg = AlertDialog.Builder(this).setTitle(t.title).setMessage("Meringkas...").show()
+        thread {
+            val out = try { AI.run(this, t, false, "") } catch (e: Exception) { "Gagal: ${e.message}" }
+            ui.post { dlg.dismiss(); showText("Ringkasan", out) }
+        }
+    }
+
+    private fun runSolve(t: Task, extra: String, atts: List<Att>) {
+        val dlg = AlertDialog.Builder(this).setTitle(t.title).setMessage("AI sedang mengerjakan tugas...").show()
+        thread {
+            var ok = true
+            val out = try { AI.run(this, t, true, extra, atts) } catch (e: Exception) { ok = false; "Gagal: ${e.message}" }
+            ui.post {
+                dlg.dismiss()
+                if (ok && t.id != "manual") prefs().edit().putString("draft_" + t.id, out).apply()
+                val btn = if (ok && t.id != "manual") gpill("📤 Kumpulkan tugas ini") { submitDialog(t, out) } else null
+                showText("Draf jawaban", out, if (ok) "Tinjau dan edit dulu sebelum dikumpulkan." else "", btn)
+            }
+        }
+    }
+
+    /* ---------------- Kumpulkan tugas ---------------- */
+    private fun submitDialog(t: Task, draft: String) {
+        val why = Submit.why(this, t)
+        if (why != null) {
+            AlertDialog.Builder(this).setTitle("Kumpulkan tugas").setMessage(why)
+                .setPositiveButton("Buka halaman") { _, _ -> if (t.url.isNotBlank()) startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(t.url))) }
+                .setNegativeButton("Tutup", null).show()
+            return
+        }
+        subFiles.clear()
+        val et = field("Teks jawaban (kosongkan jika hanya mengumpulkan file)").apply { minLines = 6; gravity = Gravity.TOP; setText(draft) }
+        val info = tv("", 12f, Pal.mute).apply { setPadding(0, dp(8), 0, 0) }
+        subInfo = info; refreshSub()
+        val ok = CheckBox(this).apply { text = "Saya sudah meninjau jawaban ini dan siap mengumpulkan"; setTextColor(Pal.text); textSize = 13f }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0)
+            addView(tv(t.title, 14f, Pal.cyan, true).apply { setPadding(0, 0, 0, dp(8)) })
+            addView(et)
+            addView(row(ghost("📎 Lampirkan file") { pickAny() }))
+            addView(info); addView(ok)
+        }
+        val d = AlertDialog.Builder(this).setTitle("Kumpulkan tugas").setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Kumpulkan", null).setNegativeButton("Batal", null).create()
+        d.setOnShowListener {
+            val b = d.getButton(AlertDialog.BUTTON_POSITIVE)
+            b.isEnabled = false
+            ok.setOnCheckedChangeListener { _, v -> b.isEnabled = v }
+            b.setOnClickListener {
+                b.isEnabled = false; d.setTitle("Mengirim...")
+                val files = subFiles.toList(); val txt = et.text.toString()
+                thread {
+                    var msg = ""; var err: String? = null
+                    try { msg = Submit.send(this, t, txt, files) } catch (e: Exception) { err = e.message ?: "gagal" }
+                    ui.post {
+                        d.setTitle("Kumpulkan tugas")
+                        if (err != null) { b.isEnabled = ok.isChecked; toast("Gagal: $err") }
+                        else {
+                            d.dismiss()
+                            val dn = prefs().getStringSet("done", emptySet())!!.toMutableSet(); dn.add(t.id)
+                            prefs().edit().putStringSet("done", dn).apply(); render()
+                            AlertDialog.Builder(this).setTitle("Berhasil").setMessage(msg).setPositiveButton("OK", null).show()
+                        }
+                    }
+                }
+            }
+        }
+        d.show()
+    }
+
+    /* ---------------- Update aplikasi ---------------- */
+    private fun updateCard(i: Updater.Info) = card().apply {
+        background = shape(tint(Pal.green, 36), 22, tint(Pal.green, 120))
+        addView(tv("⬆️ Pembaruan tersedia (versi ${i.code})", 15f, Pal.green, true))
+        if (i.notes.isNotBlank()) addView(tv(i.notes.trim().take(160), 12f, Pal.mute).apply { setPadding(0, dp(4), 0, 0) })
+        addView(row(gpill("Perbarui sekarang") { startUpdate(i) }))
+    }
+
+    private fun startUpdate(i: Updater.Info) {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            toast("Izinkan 'Pasang aplikasi tidak dikenal' untuk aplikasi ini, lalu tekan Perbarui lagi.")
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            return
+        }
+        val dlg = AlertDialog.Builder(this).setTitle("Pembaruan").setMessage("Mengunduh versi ${i.code}...").setCancelable(false).show()
+        thread {
+            val err = try { Updater.install(this, i.url); null } catch (e: Exception) { e.message ?: "gagal" }
+            ui.post { dlg.dismiss(); if (err != null) toast("Gagal memperbarui: $err") }
+        }
     }
 
     /* ---------------- Pengaturan ---------------- */
@@ -336,30 +522,24 @@ class MainActivity : Activity() {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("Moodle", "Canvas"))
             setSelection(if (p.str("platform") == "canvas") 1 else 0)
         }
-        fun f(h: String, k: String, d: String = "") = EditText(this).apply { hint = h; setText(p.str(k, d)); setSingleLine() }
+        fun f(h: String, k: String, d: String = "") = field(h).apply { setText(p.str(k, d)); setSingleLine() }
         val url = f("URL web kampus, mis. https://elearning.kampus.ac.id", "baseUrl")
         val min = f("Cek otomatis tiap (menit, minimal 15)", "syncMin", "30")
         val hrs = f("Pengingat sebelum deadline (jam, pisah koma)", "hours", "24,6,1")
         val key = f("API key Anthropic milikmu", "apiKey").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
         val model = f("Model", "model", "claude-sonnet-5-5")
-        val token = f("Token Moodle (untuk login SSO)", "token").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
-        val getTok = Button(this).apply {
-            text = "Ambil token di web kampus"; isAllCaps = false
-            setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url.text.toString().trim().trimEnd('/') + "/user/managetoken.php"))) }
-        }
-        val upd = Button(this).apply {
-            text = "Cek pembaruan (versi ${Updater.current(this@MainActivity)})"; isAllCaps = false
-            setOnClickListener {
-                if (Updater.slug(this@MainActivity).isBlank()) { Toast.makeText(context, "Build lokal: repo GitHub belum diatur.", Toast.LENGTH_LONG).show(); return@setOnClickListener }
-                thread {
-                    val n = Updater.refresh(this@MainActivity, false)
-                    ui.post { Toast.makeText(this@MainActivity, if (n != null) "Versi ${n.code} tersedia" else "Sudah versi terbaru", Toast.LENGTH_SHORT).show(); render() }
-                }
+        val token = f("Token Moodle (untuk login SSO dan kumpulkan tugas)", "token").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        val getTok = ghost("Ambil token di web kampus") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url.text.toString().trim().trimEnd('/') + "/user/managetoken.php"))) }
+        val upd = ghost("Cek pembaruan (versi ${Updater.current(this)})") {
+            if (Updater.slug(this).isBlank()) { toast("Build lokal: repo GitHub belum diatur."); return@ghost }
+            thread {
+                val n = Updater.refresh(this, false)
+                ui.post { toast(if (n != null) "Versi ${n.code} tersedia" else "Sudah versi terbaru"); render() }
             }
         }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0)
-            listOf(sp, url, getTok, token, min, hrs, key, model, upd).forEach { addView(it) }
+            listOf<View>(sp, url, getTok, token, min, hrs, key, model, upd).forEach { addView(it, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }) }
         }
         AlertDialog.Builder(this).setTitle("Pengaturan").setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Simpan") { _, _ ->
