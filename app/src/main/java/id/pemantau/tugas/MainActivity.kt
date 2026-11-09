@@ -14,12 +14,14 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.InputType
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
-import android.widget.AdapterView
+import android.view.animation.AlphaAnimation
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
@@ -38,6 +40,7 @@ class MainActivity : Activity() {
     private var fromLogin = false
     private var built = false
     private var tab = 0 // 0 Tugas, 1 Kuliah, 2 AI Studio
+    private var fCourse = "" // filter mata kuliah di tab Tugas (kosong = semua)
 
     // ---- AI Studio ----
     private var sMode = 0      // 0 ringkas, 1 latihan soal, 2 kerjakan tugas
@@ -151,7 +154,7 @@ class MainActivity : Activity() {
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(16)) }
         val nav = LinearLayout(this).apply { background = shape(0xE6121830.toInt(), 28, Pal.edge); setPadding(dp(6), dp(6), dp(6), dp(6)) }
         navViews = listOf("🏠" to "Tugas", "📚" to "Kuliah", "✨" to "AI Studio").mapIndexed { i, (e, l) ->
-            TextView(this).apply { text = "$e\n$l"; gravity = Gravity.CENTER; textSize = 11f; setPadding(0, dp(8), 0, dp(8)); setOnClickListener { tab = i; render() } }
+            TextView(this).apply { text = "$e\n$l"; gravity = Gravity.CENTER; textSize = 11f; setPadding(0, dp(8), 0, dp(8)); setOnClickListener { tab = i; render(); list.startAnimation(AlphaAnimation(0f, 1f).apply { duration = 220 }) } }
         }
         navViews.forEach { nav.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
         setContentView(LinearLayout(this).apply {
@@ -198,14 +201,61 @@ class MainActivity : Activity() {
         layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) }
     }
 
+    /** Baris chip yang bisa digeser; dipakai untuk filter mata kuliah. */
+    private fun chipRow(items: List<String>, selected: Int, onPick: (Int) -> Unit) = HorizontalScrollView(this).apply {
+        isHorizontalScrollBarEnabled = false
+        addView(LinearLayout(this@MainActivity).apply {
+            items.forEachIndexed { i, s ->
+                val on = i == selected
+                addView(TextView(this@MainActivity).apply {
+                    text = s; textSize = 12f; maxLines = 1; ellipsize = TextUtils.TruncateAt.END; maxWidth = dp(220)
+                    setTypeface(null, if (on) Typeface.BOLD else Typeface.NORMAL)
+                    setTextColor(if (on) Color.WHITE else Pal.mute)
+                    setPadding(dp(14), dp(8), dp(14), dp(8))
+                    background = if (on) grad(18) else shape(Pal.glass, 18, Pal.edge)
+                    setOnClickListener { onPick(i) }
+                }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) })
+            }
+        })
+    }
+
     private fun renderTasks() {
         val p = prefs(); val done = p.getStringSet("done", emptySet())!!; val now = System.currentTimeMillis()
-        val all = loadTasks(this); val active = all.filter { it.id !in done }
+        val every = loadTasks(this)
+        val names = every.map { it.course }.filter { it.isNotBlank() }.distinct().sortedBy { it.lowercase() }
+        if (fCourse.isNotEmpty() && fCourse !in names) fCourse = ""
+        val all = every.filter { fCourse.isEmpty() || it.course == fCourse }
+        val active = all.filter { it.id !in done }
+
+        if (names.size > 1) {
+            val opts = listOf("Semua") + names
+            list.addView(chipRow(opts, maxOf(0, opts.indexOf(fCourse))) { fCourse = if (it == 0) "" else opts[it]; render() },
+                LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+        }
+
         val st = LinearLayout(this)
         st.addView(stat(active.size, "AKTIF", Pal.cyan))
         st.addView(stat(active.count { it.due >= now && it.due - now < 86400000L }, "< 24 JAM", Pal.amber))
         st.addView(stat(active.count { it.due < now }, "TERLAMBAT", Pal.red))
         list.addView(st, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+        // Kartu sorotan: deadline paling dekat
+        val next = active.filter { it.due >= now }.minByOrNull { it.due }
+        if (next != null) {
+            val urgent = next.due - now < 86400000L
+            val col = if (urgent) Pal.amber else Pal.cyan
+            val sisa = left(next.due - now)
+            list.addView(glowCard(col).apply {
+                addView(label("Deadline terdekat"))
+                addView(tv("$sisa lagi", 30f, col, true))
+                addView(tv(next.title, 15f, Pal.text, true).apply { setPadding(0, dp(4), 0, 0) })
+                addView(tv(next.course, 12f, Pal.mute))
+                addView(row(
+                    gpill("🤖 Kerjakan") { openStudio(2, next.course, next.id) },
+                    ghost("📤 Kumpulkan", Pal.green) { submitDialog(next, prefs().str("draft_" + next.id)) }))
+            })
+        }
+
         if (all.isNotEmpty()) {
             val finished = all.size - active.size
             val frac = finished.toFloat() / all.size
@@ -234,6 +284,7 @@ class MainActivity : Activity() {
         val fmt = SimpleDateFormat("EEEE, d MMM HH:mm", Locale.forLanguageTag("id-ID"))
         return card().apply {
             alpha = if (isDone) .55f else 1f
+            background = shape(Pal.glass, 24, if (isDone) Pal.edge else tint(col, 150))
             addView(chip(label, col), LinearLayout.LayoutParams(-2, -2))
             addView(tv(t.title, 16f, Pal.text, true).apply { setPadding(0, dp(8), 0, 0) })
             addView(tv(t.course, 12f, Pal.mute))
@@ -255,7 +306,7 @@ class MainActivity : Activity() {
     /* ---------------- Tab Kuliah ---------------- */
     private fun renderCourses() {
         val cs = courses(); val tasks = loadTasks(this); val done = prefs().getStringSet("done", emptySet())!!
-        list.addView(card().apply {
+        list.addView(glowCard(Pal.cyan).apply {
             addView(tv("📋 Materi sendiri", 16f, Pal.text, true))
             addView(tv("Tempel teks atau lampirkan PDF dari HP, lalu minta AI meringkas atau membuat soal.", 12f, Pal.mute))
             addView(row(ghost("✨ Ringkas") { openStudio(0, "", "") }, ghost("📝 Soal") { openStudio(1, "", "") }))
@@ -263,7 +314,7 @@ class MainActivity : Activity() {
         if (cs.isEmpty()) { empty("📚", "Belum ada mata kuliah.\nTekan 🔐 untuk login, lalu ↻ untuk sinkron."); return }
         cs.forEach { k ->
             val n = tasks.count { it.course == k.name && it.id !in done }
-            list.addView(card().apply {
+            list.addView(glowCard(if (n > 0) Pal.amber else Pal.violet).apply {
                 addView(tv(k.name, 16f, Pal.text, true))
                 addView(tv(if (n > 0) "$n tugas aktif" else "Tidak ada tugas aktif", 12f, if (n > 0) Pal.amber else Pal.mute))
                 addView(row(ghost("📂 Materi") { materiDialog(k) }, ghost("✨ Ringkas") { openStudio(0, k.name, "") }, gpill("📝 Soal") { openStudio(1, k.name, "") }))
@@ -315,13 +366,26 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun spinner(items: List<String>, sel: Int, onPick: (Int) -> Unit) = Spinner(this).apply {
-        adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items)
-        setSelection(sel, false)
-        onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) { if (pos != sel) onPick(pos) }
-            override fun onNothingSelected(p: AdapterView<*>?) {}
-        }
+    /** Kotak pilihan bergaya modern: menampilkan nilai terpilih, ketuk untuk membuka daftar. */
+    private fun selector(value: String, onClick: () -> Unit) = LinearLayout(this).apply {
+        gravity = Gravity.CENTER_VERTICAL
+        background = shape(tint(Color.WHITE, 18), 16, Pal.edge)
+        setPadding(dp(14), dp(13), dp(14), dp(13))
+        addView(tv(value, 14f, Pal.text, true).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, -2, 1f))
+        addView(tv("▾", 16f, Pal.cyan, true))
+        setOnClickListener { onClick() }
+    }
+
+    private fun pickCourse(names: List<String>) {
+        AlertDialog.Builder(this).setTitle("Pilih mata kuliah")
+            .setItems(names.toTypedArray()) { _, pos -> sCourse = pos; sTask = 0; loadPdfs(); render() }
+            .setNegativeButton("Batal", null).show()
+    }
+
+    private fun pickTask(names: List<String>) {
+        AlertDialog.Builder(this).setTitle("Pilih tugas")
+            .setItems(names.toTypedArray()) { _, pos -> sTask = pos; render() }
+            .setNegativeButton("Batal", null).show()
     }
 
     private fun renderStudio() {
@@ -332,20 +396,36 @@ class MainActivity : Activity() {
         val tasks = loadTasks(this).filter { crs == null || it.course == crs.name }
         if (sTask > tasks.size) sTask = 0
 
-        list.addView(card().apply {
-            addView(label("Mode"))
-            val modes = listOf("✨ Ringkas", "📝 Latihan soal", "🤖 Kerjakan")
-            addView(row(*modes.mapIndexed { i, m -> if (i == sMode) gpill(m) { } else ghost(m) { sMode = i; render() } }.toTypedArray()).apply { setPadding(0, 0, 0, 0) })
+        // Pilihan mode: ringkas / latihan soal / kerjakan tugas
+        list.addView(glowCard(Pal.cyan).apply {
+            addView(label("Mau ngapain?"))
+            val modes = listOf(
+                Triple("✨ Ringkas materi", "Poin utama, istilah penting, dan pertanyaan cek pemahaman", 0),
+                Triple("📝 Latihan soal", "10 soal campuran lengkap dengan kunci jawaban", 1),
+                Triple("🤖 Kerjakan tugas", "Draf jawaban lengkap yang bisa kamu edit lalu kumpulkan", 2))
+            modes.forEach { (title, sub, idx) ->
+                val isOn = idx == sMode
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(14), dp(12), dp(14), dp(12))
+                    background = if (isOn) grad(16) else shape(Pal.glass, 16, Pal.edge)
+                    addView(tv(title, 14f, if (isOn) Color.WHITE else Pal.text, true))
+                    addView(tv(sub, 11f, if (isOn) 0xCCFFFFFF.toInt() else Pal.mute))
+                    setOnClickListener { sMode = idx; render() }
+                }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            }
         })
 
         list.addView(card().apply {
             addView(label("Mata kuliah"))
-            addView(spinner(names, sCourse) { pos -> sCourse = pos; sTask = 0; loadPdfs(); render() })
+            addView(selector(names[sCourse]) { pickCourse(names) })
+            if (crs != null) addView(tv("Materi PDF mata kuliah ini dimuat otomatis di bawah.", 11f, Pal.mute).apply { setPadding(0, dp(8), 0, 0) })
         })
 
         if (sMode == 2) list.addView(card().apply {
             addView(label("Tugas yang dikerjakan"))
-            addView(spinner(listOf("✍ Tulis soal/instruksi sendiri") + tasks.map { it.title }, sTask) { pos -> sTask = pos; render() })
+            val tnames = listOf("✍ Tulis soal/instruksi sendiri") + tasks.map { it.title }
+            addView(selector(tnames[sTask]) { pickTask(tnames) })
         })
 
         list.addView(card().apply {
@@ -367,7 +447,7 @@ class MainActivity : Activity() {
         list.addView(card().apply {
             addView(label("Materi PDF"))
             if (sBusy) addView(tv("Mengambil daftar berkas materi...", 12f, Pal.mute))
-            else if (crs != null && sPdfs.isEmpty()) addView(tv("Tidak ada PDF ditemukan di mata kuliah ini.", 12f, Pal.mute))
+            else if (crs != null && sPdfs.isEmpty()) addView(tv("Tidak ada PDF ditemukan di mata kuliah ini.\nKamu tetap bisa menempel teks materi sendiri di atas.", 12f, Pal.mute))
             else if (crs == null) addView(tv("Pilih mata kuliah untuk memuat PDF materi otomatis, atau lampirkan dari HP.", 12f, Pal.mute))
             sPdfs.forEachIndexed { i, a ->
                 addView(LinearLayout(this@MainActivity).apply {
@@ -495,8 +575,7 @@ class MainActivity : Activity() {
     }
 
     /* ---------------- Update aplikasi ---------------- */
-    private fun updateCard(i: Updater.Info) = card().apply {
-        background = shape(tint(Pal.green, 36), 22, tint(Pal.green, 120))
+    private fun updateCard(i: Updater.Info) = glowCard(Pal.green).apply {
         addView(tv("⬆️ Pembaruan tersedia (versi ${i.code})", 15f, Pal.green, true))
         if (i.notes.isNotBlank()) addView(tv(i.notes.trim().take(160), 12f, Pal.mute).apply { setPadding(0, dp(4), 0, 0) })
         addView(row(gpill("Perbarui sekarang") { startUpdate(i) }))
