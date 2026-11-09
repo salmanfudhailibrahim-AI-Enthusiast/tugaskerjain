@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.widget.*
@@ -169,6 +170,7 @@ class MainActivity : Activity() {
         setContentView(root)
         Sync.periodic(this)
         render()
+        thread { Updater.refresh(this, false); ui.post { render() } }
     }
 
     private fun sync() { status.text = "Menyinkronkan..."; thread { Sync.run(this); ui.post { render() } } }
@@ -198,7 +200,28 @@ class MainActivity : Activity() {
             t.setTextColor(if (on) Pal.ink else Pal.mute); t.setTypeface(null, if (on) Typeface.BOLD else Typeface.NORMAL)
         }
         list.removeAllViews()
+        Updater.pending(this)?.let { list.addView(updateCard(it)) }
         if (tab == 0) renderTasks(tasks, done, now) else renderCourses(tasks)
+    }
+
+    private fun updateCard(i: Updater.Info) = card().apply {
+        background = shape(tint(Pal.green, 28), 20)
+        addView(tv("⬆️ Pembaruan tersedia (versi ${i.code})", 15f, Pal.green, true))
+        if (i.notes.isNotBlank()) addView(tv(i.notes.trim().take(160), 12f, Pal.mute).apply { setPadding(0, dp(4), 0, 0) })
+        addView(row(pill("Perbarui sekarang", Pal.green, Color.WHITE) { startUpdate(i) }))
+    }
+
+    private fun startUpdate(i: Updater.Info) {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            Toast.makeText(this, "Izinkan 'Pasang aplikasi tidak dikenal' untuk aplikasi ini, lalu tekan Perbarui lagi.", Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            return
+        }
+        val dlg = AlertDialog.Builder(this).setTitle("Pembaruan").setMessage("Mengunduh versi ${i.code}...").setCancelable(false).show()
+        thread {
+            val err = try { Updater.install(this, i.url); null } catch (e: Exception) { e.message ?: "gagal" }
+            ui.post { dlg.dismiss(); if (err != null) Toast.makeText(this, "Gagal memperbarui: $err", Toast.LENGTH_LONG).show() }
+        }
     }
 
     private fun empty(emoji: String, msg: String) {
@@ -324,9 +347,19 @@ class MainActivity : Activity() {
             text = "Ambil token di web kampus"; isAllCaps = false
             setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url.text.toString().trim().trimEnd('/') + "/user/managetoken.php"))) }
         }
+        val upd = Button(this).apply {
+            text = "Cek pembaruan (versi ${Updater.current(this@MainActivity)})"; isAllCaps = false
+            setOnClickListener {
+                if (Updater.slug(this@MainActivity).isBlank()) { Toast.makeText(context, "Build lokal: repo GitHub belum diatur.", Toast.LENGTH_LONG).show(); return@setOnClickListener }
+                thread {
+                    val n = Updater.refresh(this@MainActivity, false)
+                    ui.post { Toast.makeText(this@MainActivity, if (n != null) "Versi ${n.code} tersedia" else "Sudah versi terbaru", Toast.LENGTH_SHORT).show(); render() }
+                }
+            }
+        }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0)
-            listOf(sp, url, getTok, token, min, hrs, key, model).forEach { addView(it) }
+            listOf(sp, url, getTok, token, min, hrs, key, model, upd).forEach { addView(it) }
         }
         AlertDialog.Builder(this).setTitle("Pengaturan").setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Simpan") { _, _ ->
