@@ -252,7 +252,7 @@ object Sync {
 }
 
 class SyncWorker(c: Context, w: WorkerParameters) : Worker(c, w) {
-    override fun doWork(): Result { Sync.run(applicationContext); return Result.success() }
+    override fun doWork(): Result { Sync.run(applicationContext); Updater.refresh(applicationContext, true); return Result.success() }
 }
 
 class RemindWorker(c: Context, w: WorkerParameters) : Worker(c, w) {
