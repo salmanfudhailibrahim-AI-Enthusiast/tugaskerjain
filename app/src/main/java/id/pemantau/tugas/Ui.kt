@@ -22,9 +22,11 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
-/** Palet "neon di atas gelap". */
+/** Palet neon futuristik gelap dengan aksen cyan, ungu, dan pink. */
 object Pal {
     val bg0 = 0xFF070B18.toInt()
+    val bg1 = 0xFF0F172A.toInt()
+    val bg2 = 0xFF1E293B.toInt()
     val text = 0xFFF1F5FF.toInt()
     val mute = 0xFF8E9AB8.toInt()
     val cyan = 0xFF22D3EE.toInt()
@@ -35,16 +37,24 @@ object Pal {
     val red = 0xFFF87171.toInt()
     val glass = 0x14FFFFFF
     val edge = 0x2EFFFFFF
+    val glowCyan = 0x3322D3EE
+    val glowViolet = 0x338B5CF6
 }
 
 fun tint(c: Int, a: Int) = Color.argb(a, Color.red(c), Color.green(c), Color.blue(c))
 
-fun Context.shape(fill: Int, r: Int = 16, stroke: Int = 0) = GradientDrawable().apply {
-    setColor(fill); cornerRadius = dp(r).toFloat(); if (stroke != 0) setStroke(dp(1), stroke)
+fun Context.shape(fill: Int, r: Int = 16, stroke: Int = 0, strokeW: Int = 1) = GradientDrawable().apply {
+    setColor(fill); cornerRadius = dp(r).toFloat()
+    if (stroke != 0) setStroke(dp(strokeW), stroke)
 }
 
+/** Gradien horizontal cyan-ke-ungu. */
 fun Context.grad(r: Int = 20, c1: Int = Pal.cyan, c2: Int = Pal.violet) =
     GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(c1, c2)).apply { cornerRadius = dp(r).toFloat() }
+
+/** Gradien vertikal ungu-ke-pink. */
+fun Context.gradVertical(r: Int = 20, c1: Int = Pal.violet, c2: Int = Pal.pink) =
+    GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(c1, c2)).apply { cornerRadius = dp(r).toFloat() }
 
 /** Latar gelap dengan cahaya aurora (cyan, ungu, pink). */
 fun Context.aurora(): Drawable {
@@ -61,35 +71,49 @@ fun Context.tv(s: String, sz: Float = 14f, color: Int = Pal.text, bold: Boolean 
     text = s; textSize = sz; setTextColor(color); if (bold) setTypeface(null, Typeface.BOLD)
 }
 
-fun Context.label(s: String) = tv(s.uppercase(), 11f, Pal.cyan, true).apply { letterSpacing = 0.12f; setPadding(0, 0, 0, dp(6)) }
+fun Context.label(s: String) = tv(s.uppercase(), 11f, Pal.cyan, true).apply { letterSpacing = 0.14f; setPadding(0, 0, 0, dp(6)) }
 
 fun Context.pill(t: String, fill: Int, fg: Int, f: () -> Unit) = TextView(this).apply {
     text = t; setTextColor(fg); textSize = 13f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD)
-    setPadding(dp(8), dp(11), dp(8), dp(11)); background = shape(fill, 20); setOnClickListener { f() }
+    setPadding(dp(10), dp(12), dp(10), dp(12)); background = shape(fill, 20); setOnClickListener { f() }
 }
 
-/** Tombol utama bergradien. */
+/** Tombol utama bergradien dengan efek glow tipis. */
 fun Context.gpill(t: String, f: () -> Unit) = TextView(this).apply {
     text = t; setTextColor(Color.WHITE); textSize = 13f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD)
-    setPadding(dp(8), dp(11), dp(8), dp(11)); background = grad(20); setOnClickListener { f() }
+    setPadding(dp(10), dp(12), dp(10), dp(12))
+    background = LayerDrawable(arrayOf(
+        shape(Pal.glowCyan, 20),
+        grad(20)
+    )).apply { setLayerInset(1, dp(1), dp(1), dp(1), dp(1)) }
+    setOnClickListener { f() }
 }
 
-/** Tombol sekunder berkaca. */
+/** Tombol sekunder berkaca dengan border tipis. */
 fun Context.ghost(t: String, fg: Int = Pal.text, f: () -> Unit) = TextView(this).apply {
     text = t; setTextColor(fg); textSize = 12f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD)
-    setPadding(dp(6), dp(11), dp(6), dp(11)); background = shape(Pal.glass, 20, Pal.edge); setOnClickListener { f() }
+    setPadding(dp(8), dp(12), dp(8), dp(12)); background = shape(Pal.glass, 20, Pal.edge); setOnClickListener { f() }
 }
 
+/** Chip status dengan warna dinamis. */
 fun Context.chip(s: String, c: Int) = TextView(this).apply {
     text = s; textSize = 11f; setTextColor(c); setTypeface(null, Typeface.BOLD)
-    setPadding(dp(10), dp(4), dp(10), dp(4)); background = shape(tint(c, 40), 12)
+    setPadding(dp(10), dp(5), dp(10), dp(5)); background = shape(tint(c, 45), 12)
 }
 
-/** Kartu kaca. */
+/** Kartu kaca futuristik dengan border glow halus. */
 fun Context.card() = LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
-    setPadding(dp(16), dp(14), dp(16), dp(14))
-    background = shape(Pal.glass, 22, Pal.edge)
+    setPadding(dp(18), dp(16), dp(18), dp(16))
+    background = shape(Pal.glass, 24, Pal.edge)
+    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(12)) }
+}
+
+/** Kartu dengan border glow berwarna. */
+fun Context.glowCard(borderColor: Int) = LinearLayout(this).apply {
+    orientation = LinearLayout.VERTICAL
+    setPadding(dp(18), dp(16), dp(18), dp(16))
+    background = shape(tint(borderColor, 25), 24, borderColor)
     layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(12)) }
 }
 
