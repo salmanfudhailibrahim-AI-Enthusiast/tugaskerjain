@@ -39,6 +39,7 @@ class PdfActivity : Activity() {
     private lateinit var info: TextView
     private lateinit var lv: ListView
     private lateinit var actions: LinearLayout
+    private lateinit var titleView: TextView
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
@@ -60,7 +61,8 @@ class PdfActivity : Activity() {
         }
         val bar = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(36), dp(16), dp(10))
-            addView(tv(name, 15f, Pal.text, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, -2, 1f))
+            titleView = tv(name, 15f, Pal.text, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+            addView(titleView, LinearLayout.LayoutParams(0, -2, 1f))
             addView(gpill("✨ Ringkas") { ai(false) }.apply { setPadding(dp(14), dp(8), dp(14), dp(8)) }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
             addView(ghost("📝 Soal") { ai(true) }.apply { setPadding(dp(14), dp(8), dp(14), dp(8)) }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
         }
@@ -69,6 +71,10 @@ class PdfActivity : Activity() {
             addView(bar); addView(info, LinearLayout.LayoutParams(-1, -2)); addView(actions, LinearLayout.LayoutParams(-1, -2)); addView(lv, LinearLayout.LayoutParams(-1, 0, 1f))
         })
 
+        load()
+    }
+
+    private fun load() {
         thread {
             try {
                 val data = Docs.bytes(this, att)
@@ -83,13 +89,27 @@ class PdfActivity : Activity() {
                     val u = att.url
                     if (u != null) {
                         actions.visibility = View.VISIBLE; actions.removeAllViews()
-                        actions.addView(gpill("🔑  Masuk dengan akun kampus") { startActivity(Intent(this, GoogleActivity::class.java)) }, LinearLayout.LayoutParams(-1, -2))
-                        actions.addView(ghost("🌐 Buka di Google Drive / browser") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+                        actions.addView(gpill("📲  Buka di aplikasi Drive") {
+                            try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).setPackage("com.google.android.apps.docs")) } catch (e: Exception) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) }
+                        }, LinearLayout.LayoutParams(-1, -2))
+                        actions.addView(ghost("📥 Pilih file ini dari Drive") {
+                            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/pdf"), 5)
+                        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
                         actions.addView(tv("Atau di aplikasi Google Drive: ⋮ → Kirim salinan → Tugas Kampus.", 12f, Pal.mute).apply { setPadding(0, dp(12), 0, 0); gravity = Gravity.CENTER })
                     }
                 }
             }
         }
+    }
+
+    override fun onActivityResult(req: Int, res: Int, d: Intent?) {
+        super.onActivityResult(req, res, d)
+        if (req != 5 || res != RESULT_OK) return
+        val u = d?.data ?: return
+        att = Att(displayName(u), null, u)
+        titleView.text = att.name
+        info.text = "Membuka PDF..."; info.visibility = View.VISIBLE; lv.visibility = View.GONE; actions.visibility = View.GONE
+        load()
     }
 
     @Suppress("DEPRECATION")

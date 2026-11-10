@@ -113,12 +113,12 @@ object Drive {
 
     private fun publicDownload(id: String): ByteArray {
         val b = Net.bytes("https://drive.google.com/uc?export=download&id=$id")
-        if (b.size < 5 || String(b, 0, 5, Charsets.ISO_8859_1) != "%PDF-") throw Exception("file Drive ini tidak publik atau bukan PDF. Hubungkan akun Google di Pengaturan untuk membacanya")
+        if (b.size < 5 || String(b, 0, 5, Charsets.ISO_8859_1) != "%PDF-") throw Exception("file Drive ini hanya bisa dibuka akun kampus (tidak publik)")
         return b
     }
 
     fun download(c: Context, u: String): ByteArray {
-        val id = fileId(u) ?: throw Exception(if (folderId(u) != null) "ini folder Drive: hubungkan akun Google lalu muat ulang daftar materi" else "tautan Drive tidak dikenali")
+        val id = fileId(u) ?: throw Exception(if (folderId(u) != null) "ini folder Drive: buka lewat aplikasi Google Drive" else "tautan Drive tidak dikenali")
         if (!GoogleAuth.signedIn(c)) return publicDownload(id)
         val key = Regex("resourcekey=([^&#]+)").find(u)?.groupValues?.get(1)
         val h = mapOf("Authorization" to "Bearer " + GoogleAuth.token(c)) + (if (key != null) mapOf("X-Goog-Drive-Resource-Keys" to "$id/$key") else emptyMap())

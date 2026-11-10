@@ -42,9 +42,8 @@ class MainActivity : Activity() {
     private var tab = 0 // 0 Tugas, 1 Kuliah, 2 AI Studio
 
     // ---- AI Studio ----
-    private var sMode = 0      // 0 ringkas, 1 latihan soal, 2 kerjakan tugas
+    private var sMode = 0      // 0 ringkas, 1 latihan soal
     private var sCourse = 0    // 0 = tanpa mata kuliah, n = urutan ke-n di daftar
-    private var sTask = 0      // 0 = tulis sendiri, n = tugas ke-n
     private var sTopic = ""
     private var sPaste = ""
     private var sPdfs: List<Att> = emptyList()
@@ -71,18 +70,18 @@ class MainActivity : Activity() {
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
 
+    private fun nameOf(u: Uri): String = contentResolver.query(u, null, null, null, null)?.use { cur ->
+        val i = cur.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (cur.moveToFirst() && i >= 0) cur.getString(i) else null
+    } ?: "berkas"
+
     override fun onActivityResult(req: Int, res: Int, d: Intent?) {
         super.onActivityResult(req, res, d)
-        if ((req != 77 && req != 78) || res != RESULT_OK || d == null) return
+        if ((req != 77 && req != 78 && req != 79) || res != RESULT_OK || d == null) return
         val uris = ArrayList<Uri>(); val cd = d.clipData
         if (cd != null) for (i in 0 until cd.itemCount) uris += cd.getItemAt(i).uri else d.data?.let { uris += it }
-        uris.forEach { u ->
-            val nm = contentResolver.query(u, null, null, null, null)?.use { cur ->
-                val i = cur.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (cur.moveToFirst() && i >= 0) cur.getString(i) else null
-            } ?: "berkas"
-            if (req == 77) picked += Att(nm, uri = u) else subFiles += Att(nm, uri = u)
-        }
+        if (req == 79) { uris.firstOrNull()?.let { openPdf(Att(nameOf(it), uri = it)) }; return }
+        uris.forEach { u -> if (req == 77) picked += Att(nameOf(u), uri = u) else subFiles += Att(nameOf(u), uri = u) }
         if (req == 77) render() else refreshSub()
     }
 
@@ -243,10 +242,9 @@ class MainActivity : Activity() {
             addView(tv(t.title, 16f, Pal.text, true).apply { setPadding(0, dp(8), 0, 0) })
             addView(tv(t.course, 12f, Pal.mute))
             addView(tv("⏰ " + fmt.format(Date(t.due)), 13f, col).apply { setPadding(0, dp(4), 0, 0) })
-            addView(row(ghost("✨ Ringkas") { runAi(t) }, gpill("🤖 Kerjakan") { openStudio(2, t.course, t.id) }))
+            addView(row(gpill("✨ Ringkas") { runAi(t) }, ghost("🌐 Buka") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(t.url))) }))
             addView(row(
-                ghost("📤 Kumpulkan", Pal.green) { submitDialog(t, prefs().str("draft_" + t.id)) },
-                ghost("🌐 Buka") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(t.url))) },
+                ghost("📤 Kumpulkan", Pal.green) { submitDialog(t, "") },
                 ghost(if (isDone) "↩ Batal" else "✓ Selesai") { toggleDone(t.id) }))
         }
     }
@@ -283,23 +281,44 @@ class MainActivity : Activity() {
             val l = try { Campus.coursePdfs(this, k.id) } catch (e: Exception) { ui.post { toast("Gagal: ${e.message}") }; return@thread }
             ui.post {
                 if (l.isEmpty()) emptyMateri(k)
-                else AlertDialog.Builder(this).setTitle(k.name).setItems(l.map { attName(it) }.toTypedArray()) { _, i -> openPdf(l[i]) }
+                else AlertDialog.Builder(this).setTitle(k.name).setItems(l.map { attName(it) }.toTypedArray()) { _, i -> openAtt(l[i]) }
                     .setNegativeButton("Tutup", null).show()
             }
         }
     }
 
-    /** Tidak ada PDF: tawarkan login Google dan laporan diagnosa. */
+    /** Berkas Google Drive dibuka lewat aplikasi Drive yang sudah login; berkas lain langsung di pembaca. */
+    private fun openAtt(a: Att) {
+        val u = a.url
+        if (u != null && Drive.isDrive(u)) openDrive(a) else openPdf(a)
+    }
+
+    private fun openDrive(a: Att) {
+        AlertDialog.Builder(this).setTitle(a.name)
+            .setMessage("File ini ada di Google Drive dan hanya bisa dibuka akun kampusmu.\n\n• Buka di Drive: dibaca langsung di aplikasi Google Drive.\n• Ambil ke aplikasi: pilih file ini lewat pemilih file (akun Drive-mu sudah login), lalu bisa dibaca di sini dan diringkas AI.")
+            .setPositiveButton("📲 Buka di Drive") { _, _ -> viewInDrive(a.url ?: "") }
+            .setNeutralButton("📥 Ambil ke aplikasi") { _, _ -> toast("Pilih file: " + a.name); pickFromDrive() }
+            .setNegativeButton("Coba langsung") { _, _ -> openPdf(a) }.show()
+    }
+
+    private fun viewInDrive(u: String) {
+        val i = Intent(Intent.ACTION_VIEW, Uri.parse(u))
+        try { startActivity(Intent(i).setPackage("com.google.android.apps.docs")) } catch (e: Exception) { startActivity(i) }
+    }
+
+    private fun pickFromDrive() = startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/pdf"), 79)
+
+    /** Tidak ada PDF: tawarkan laporan diagnosa. */
     private fun emptyMateri(k: Crs) {
         thread {
             val rep = try { Campus.diagnose(this, k.id) } catch (e: Exception) { "gagal: ${e.message}" }
             ui.post {
                 AlertDialog.Builder(this).setTitle("PDF tidak ditemukan")
-                    .setMessage("Kalau materi ditaut ke Google Drive, hubungkan akun Google dulu. Kalau tetap kosong, salin laporan ini dan kirim ke pengembang agar pencariannya bisa disesuaikan dengan tampilan ELITA.")
+                    .setMessage("Materi mungkin ada di halaman yang belum terbaca. Salin laporan ini dan kirim ke pengembang agar pencariannya bisa disesuaikan dengan tampilan ELITA.")
                     .setPositiveButton("Salin laporan") { _, _ ->
                         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("laporan", rep)); toast("Laporan disalin")
                     }
-                    .setNeutralButton("Hubungkan Google") { _, _ -> startActivity(Intent(this, GoogleActivity::class.java)) }
+                    .setNeutralButton("Buka di browser") { _, _ -> startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(prefs().str("baseUrl").trimEnd('/') + "/course/view.php?id=" + k.id))) }
                     .setNegativeButton("Tutup", null).show()
             }
         }
@@ -309,11 +328,6 @@ class MainActivity : Activity() {
     private fun openStudio(mode: Int, course: String, taskId: String) {
         sMode = mode
         sCourse = if (course.isBlank()) 0 else courses().indexOfFirst { it.name == course } + 1
-        sTask = 0
-        if (taskId.isNotEmpty()) {
-            val ts = loadTasks(this).filter { sCourse == 0 || it.course == course }
-            sTask = ts.indexOfFirst { it.id == taskId } + 1
-        }
         sTopic = ""; sPaste = ""; picked.clear()
         tab = 2; loadPdfs(); render()
     }
@@ -329,7 +343,7 @@ class MainActivity : Activity() {
             ui.post {
                 sBusy = false
                 if (sCourse > 0 && courses().getOrNull(sCourse - 1)?.id == crs.id) {
-                    sPdfs = l; sOn.clear(); sOn.addAll(l.indices.take(3))
+                    sPdfs = l; sOn.clear(); sOn.addAll(l.indices.filter { !Drive.isDrive(l[it].url ?: "") || GoogleAuth.signedIn(this) }.take(3))
                     if (tab == 2) render()
                 }
             }
@@ -349,47 +363,32 @@ class MainActivity : Activity() {
         val cs = courses()
         val names = listOf("— Tanpa mata kuliah (materi sendiri) —") + cs.map { it.name }
         if (sCourse >= names.size) sCourse = 0
+        if (sMode > 1) sMode = 0
         val crs = if (sCourse > 0) cs[sCourse - 1] else null
-        val tasks = loadTasks(this).filter { crs == null || it.course == crs.name }
-        if (sTask > tasks.size) sTask = 0
 
         list.addView(card().apply {
             addView(label("Mode"))
-            val modes = listOf("✨ Ringkas", "📝 Latihan soal", "🤖 Kerjakan")
+            val modes = listOf("✨ Ringkas materi", "📝 Latihan soal")
             addView(row(*modes.mapIndexed { i, m -> if (i == sMode) gpill(m) { } else ghost(m) { sMode = i; render() } }.toTypedArray()).apply { setPadding(0, 0, 0, 0) })
         })
 
         list.addView(card().apply {
             addView(label("Mata kuliah"))
-            addView(spinner(names, sCourse) { pos -> sCourse = pos; sTask = 0; loadPdfs(); render() })
-        })
-
-        if (sMode == 2) list.addView(card().apply {
-            addView(label("Tugas yang dikerjakan"))
-            addView(spinner(listOf("✍ Tulis soal/instruksi sendiri") + tasks.map { it.title }, sTask) { pos -> sTask = pos; render() })
+            addView(spinner(names, sCourse) { pos -> sCourse = pos; loadPdfs(); render() })
         })
 
         list.addView(card().apply {
-            if (sMode == 2) {
-                if (sTask == 0) {
-                    addView(label("Soal / instruksi tugas"))
-                    addView(field("Tempel soal atau jelaskan tugasnya").apply { minLines = 4; gravity = Gravity.TOP; setText(sPaste); onText { sPaste = it } })
-                }
-                addView(label("Instruksi tambahan (opsional)").apply { setPadding(0, dp(if (sTask == 0) 12 else 0), 0, dp(6)) })
-                addView(field("mis. maksimal 500 kata, bahasa formal").apply { setText(sTopic); onText { sTopic = it } })
-            } else {
-                addView(label("Topik / pertemuan (opsional)"))
-                addView(field("mis. Pertemuan 5, Bab Normalisasi").apply { setText(sTopic); onText { sTopic = it } })
-                addView(label("Tempel materi sendiri (opsional)").apply { setPadding(0, dp(12), 0, dp(6)) })
-                addView(field("Teks dari slide atau catatan").apply { minLines = 4; gravity = Gravity.TOP; setText(sPaste); onText { sPaste = it } })
-            }
+            addView(label("Topik / pertemuan (opsional)"))
+            addView(field("mis. Pertemuan 5, Bab Normalisasi").apply { setText(sTopic); onText { sTopic = it } })
+            addView(label("Tempel materi sendiri (opsional)").apply { setPadding(0, dp(12), 0, dp(6)) })
+            addView(field("Teks dari slide atau catatan").apply { minLines = 4; gravity = Gravity.TOP; setText(sPaste); onText { sPaste = it } })
         })
 
         list.addView(card().apply {
             addView(label("Materi PDF"))
             if (sBusy) addView(tv("Mengambil daftar berkas materi...", 12f, Pal.mute))
             else if (crs != null && sPdfs.isEmpty()) addView(tv("Tidak ada PDF ditemukan di mata kuliah ini.", 12f, Pal.mute))
-            else if (crs == null) addView(tv("Pilih mata kuliah untuk memuat PDF materi otomatis, atau lampirkan dari HP.", 12f, Pal.mute))
+            else if (crs == null) addView(tv("Pilih mata kuliah untuk memuat daftar materi otomatis, atau lampirkan PDF sendiri.", 12f, Pal.mute))
             sPdfs.forEachIndexed { i, a ->
                 addView(LinearLayout(this@MainActivity).apply {
                     gravity = Gravity.CENTER_VERTICAL
@@ -397,11 +396,13 @@ class MainActivity : Activity() {
                         text = attName(a); setTextColor(Pal.text); textSize = 13f; isChecked = i in sOn
                         setOnCheckedChangeListener { _, v -> if (v) sOn.add(i) else sOn.remove(i) }
                     }, LinearLayout.LayoutParams(0, -2, 1f))
-                    addView(tv("👁", 18f).apply { setPadding(dp(10), dp(6), dp(6), dp(6)); setOnClickListener { openPdf(a) } })
+                    addView(tv("👁", 18f).apply { setPadding(dp(10), dp(6), dp(6), dp(6)); setOnClickListener { openAtt(a) } })
                 })
             }
+            if (sPdfs.any { Drive.isDrive(it.url ?: "") && !GoogleAuth.signedIn(this@MainActivity) })
+                addView(tv("☁ = file Google Drive. Ketuk 👁 lalu pilih \"Ambil ke aplikasi\", atau lampirkan lewat tombol di bawah (pemilih file menampilkan Drive-mu).", 11f, Pal.amber).apply { setPadding(0, dp(8), 0, 0) })
             val all = sPdfs.isNotEmpty() && sOn.size == sPdfs.size
-            val btns = mutableListOf<View>(ghost("📎 PDF dari HP") { pickPdf() }, ghost("🔑 Google Drive") { startActivity(Intent(this@MainActivity, GoogleActivity::class.java)) })
+            val btns = mutableListOf<View>(ghost("📎 PDF (HP / Drive)") { pickPdf() })
             if (sPdfs.isNotEmpty()) btns += ghost(if (all) "Kosongkan" else "Pilih semua") { if (all) sOn.clear() else sOn.addAll(sPdfs.indices); render() }
             addView(row(*btns.toTypedArray()))
             picked.forEachIndexed { i, a ->
@@ -410,7 +411,7 @@ class MainActivity : Activity() {
             addView(tv("${sOn.size + picked.size} berkas akan dibaca AI (batas total 20 MB, ±100 halaman)", 11f, Pal.mute).apply { setPadding(0, dp(8), 0, 0) })
         })
 
-        val go = when (sMode) { 0 -> "✨  Ringkas sekarang"; 1 -> "📝  Buat latihan soal"; else -> "🤖  Kerjakan dengan AI" }
+        val go = if (sMode == 0) "✨  Ringkas sekarang" else "📝  Buat latihan soal"
         list.addView(gpill(go) { studioStart() }.apply { textSize = 15f; setPadding(0, dp(16), 0, dp(16)) }, LinearLayout.LayoutParams(-1, -2))
     }
 
@@ -418,21 +419,9 @@ class MainActivity : Activity() {
         val cs = courses(); val crs = if (sCourse > 0) cs.getOrNull(sCourse - 1) else null
         val atts = sPdfs.filterIndexed { i, _ -> i in sOn } + picked
         val cname = crs?.name ?: ""; val cid = crs?.id ?: 0L
-        if (sMode == 2) {
-            val tasks = loadTasks(this).filter { crs == null || it.course == crs.name }
-            val t: Task
-            if (sTask == 0) {
-                if (sPaste.isBlank() && atts.isEmpty()) { toast("Tulis soal/instruksi atau lampirkan PDF soal dulu."); return }
-                t = Task("manual", "Tugas", cname, 0L, "", sPaste, cid)
-            } else {
-                t = tasks.getOrNull(sTask - 1) ?: return
-            }
-            runSolve(t, sTopic, atts)
-        } else {
-            if (sPaste.isBlank() && atts.isEmpty() && cid == 0L) { toast("Pilih mata kuliah, lampirkan PDF, atau tempel materi dulu."); return }
-            val quiz = sMode == 1
-            runCourse((if (quiz) "Latihan soal" else "Ringkasan") + if (cname.isBlank()) "" else ": $cname", cname, cid, quiz, sTopic, sPaste, atts)
-        }
+        if (sPaste.isBlank() && atts.isEmpty() && cid == 0L) { toast("Pilih mata kuliah, lampirkan PDF, atau tempel materi dulu."); return }
+        val quiz = sMode == 1
+        runCourse((if (quiz) "Latihan soal" else "Ringkasan") + if (cname.isBlank()) "" else ": $cname", cname, cid, quiz, sTopic, sPaste, atts)
     }
 
     /* ---------------- Menjalankan AI ---------------- */
@@ -447,22 +436,8 @@ class MainActivity : Activity() {
     private fun runAi(t: Task) {
         val dlg = AlertDialog.Builder(this).setTitle(t.title).setMessage("Meringkas...").show()
         thread {
-            val out = try { AI.run(this, t, false, "") } catch (e: Exception) { "Gagal: ${e.message}" }
+            val out = try { AI.run(this, t) } catch (e: Exception) { "Gagal: ${e.message}" }
             ui.post { dlg.dismiss(); showText("Ringkasan", out) }
-        }
-    }
-
-    private fun runSolve(t: Task, extra: String, atts: List<Att>) {
-        val dlg = AlertDialog.Builder(this).setTitle(t.title).setMessage("AI sedang mengerjakan tugas...").show()
-        thread {
-            var ok = true
-            val out = try { AI.run(this, t, true, extra, atts) } catch (e: Exception) { ok = false; "Gagal: ${e.message}" }
-            ui.post {
-                dlg.dismiss()
-                if (ok && t.id != "manual") prefs().edit().putString("draft_" + t.id, out).apply()
-                val btn = if (ok && t.id != "manual") gpill("📤 Kumpulkan tugas ini") { submitDialog(t, out) } else null
-                showText("Draf jawaban", out, if (ok) "Tinjau dan edit dulu sebelum dikumpulkan." else "", btn)
-            }
         }
     }
 
@@ -551,7 +526,7 @@ class MainActivity : Activity() {
         val model = f("Model", "model", "claude-sonnet-5-5")
         val token = f("Token Moodle (untuk login SSO dan kumpulkan tugas)", "token").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
         val getTok = ghost("Ambil token di web kampus") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url.text.toString().trim().trimEnd('/') + "/user/managetoken.php"))) }
-        val gd = ghost(if (GoogleAuth.signedIn(this)) "🔑 Google Drive: " + GoogleAuth.email(this).ifBlank { "terhubung" } else "🔑 Hubungkan Google Drive") { startActivity(Intent(this, GoogleActivity::class.java)) }
+        val gd = ghost(if (GoogleAuth.signedIn(this)) "🔑 Google Drive: " + GoogleAuth.email(this).ifBlank { "terhubung" } else "🔑 Login Google (eksperimental)") { startActivity(Intent(this, GoogleActivity::class.java)) }
         val upd = ghost("Cek pembaruan (versi ${Updater.current(this)})") {
             if (Updater.slug(this).isBlank()) { toast("Build lokal: repo GitHub belum diatur."); return@ghost }
             thread {
