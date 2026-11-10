@@ -80,21 +80,32 @@ object Net {
         return text
     }
 
-    /** Unduh berkas biner (maks 15 MB). */
+    /** Unduh berkas biner (maks 25 MB) dengan dukungan redirect otomatis antar domain. */
     fun bytes(url: String, headers: Map<String, String> = emptyMap()): ByteArray {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 20000; c.readTimeout = 120000
-        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-        if (c.responseCode >= 400) throw Exception("HTTP ${c.responseCode}")
-        val out = ByteArrayOutputStream(); val buf = ByteArray(65536)
-        c.inputStream.use { ins ->
-            while (true) {
-                val n = ins.read(buf); if (n < 0) break
-                out.write(buf, 0, n)
-                if (out.size() > 15_000_000) throw Exception("lebih dari 15 MB")
+        var cur = url
+        for (hop in 0..5) {
+            val c = URL(cur).openConnection() as HttpURLConnection
+            c.connectTimeout = 20000; c.readTimeout = 120000
+            c.instanceFollowRedirects = true
+            headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+            val code = c.responseCode
+            if (code in 300..399) {
+                val loc = c.getHeaderField("Location") ?: break
+                cur = URL(URL(cur), loc).toString()
+                continue
             }
+            if (code >= 400) throw Exception("HTTP $code")
+            val out = ByteArrayOutputStream(); val buf = ByteArray(65536)
+            c.inputStream.use { ins ->
+                while (true) {
+                    val n = ins.read(buf); if (n < 0) break
+                    out.write(buf, 0, n)
+                    if (out.size() > 25_000_000) throw Exception("lebih dari 25 MB")
+                }
+            }
+            return out.toByteArray()
         }
-        return out.toByteArray()
+        throw Exception("terlalu banyak pengalihan")
     }
 
     /** Alamat tujuan pengalihan (302) tanpa mengikutinya; null jika tidak ada pengalihan. */

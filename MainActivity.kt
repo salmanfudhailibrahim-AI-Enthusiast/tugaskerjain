@@ -306,31 +306,9 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Membuka berkas: Jika Drive dan sudah login Google, langsung buka di pembaca PDF. */
+    /** Membuka berkas: selalu langsung buka di pembaca PDF di dalam aplikasi. */
     private fun openAtt(a: Att) {
-        val u = a.url
-        if (u != null && Drive.isDrive(u)) {
-            if (GoogleAuth.signedIn(this)) {
-                openPdf(a) // Langsung buka jika akun Google kampus sudah terhubung
-            } else {
-                openDrive(a)
-            }
-        } else {
-            openPdf(a)
-        }
-    }
-
-    private fun openDrive(a: Att) {
-        AlertDialog.Builder(this).setTitle(a.name)
-            .setMessage("File materi ini berada di Google Drive dosen.\n\n• Coba Langsung: coba baca langsung di pembaca PDF aplikasi.\n• Masuk Akun Google: masuk akun kampus (@${GoogleAuth.DOMAIN}) sekali saja untuk akses semua file Drive dosen.\n• Buka di Drive: buka di aplikasi Google Drive HP.")
-            .setPositiveButton("📄 Coba Langsung") { _, _ -> openPdf(a) }
-            .setNeutralButton("🔑 Masuk Google") { _, _ -> startActivity(Intent(this, GoogleActivity::class.java)) }
-            .setNegativeButton("📲 Aplikasi Drive") { _, _ -> viewInDrive(a.url ?: "") }.show()
-    }
-
-    private fun viewInDrive(u: String) {
-        val i = Intent(Intent.ACTION_VIEW, Uri.parse(u))
-        try { startActivity(Intent(i).setPackage("com.google.android.apps.docs")) } catch (e: Exception) { startActivity(i) }
+        openPdf(a) // Selalu langsung buka di pembaca PDF aplikasi, Drive atau bukan
     }
 
     /** Tidak ada PDF: tawarkan laporan diagnosa. */
