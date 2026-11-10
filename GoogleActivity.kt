@@ -24,11 +24,8 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * Halaman login akun Google kampus.
- *
- * TANPA Client ID. TANPA SHA-1. TANPA Google Cloud Console.
- * User cukup masuk ke akun Google mereka lewat WebView di dalam aplikasi.
- * Cookie sesi Google Drive otomatis tersimpan untuk mengunduh PDF dosen.
+ * Halaman login akun Google langsung (Tanpa Client ID).
+ * Begitu dibuka saat belum login, langsung menampilkan halaman login Google.
  */
 class GoogleActivity : Activity() {
     private val ui = Handler(Looper.getMainLooper())
@@ -50,7 +47,7 @@ class GoogleActivity : Activity() {
             background = aurora()
         }
 
-        // ========== Bagian Menu (ditampilkan saat belum/setelah login) ==========
+        // ========== Bagian Menu (ditampilkan setelah login) ==========
         menuBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(40), dp(20), dp(24))
@@ -60,50 +57,49 @@ class GoogleActivity : Activity() {
             addView(menuBox)
         }
 
-        // ========== Bagian WebView (login Google) ==========
+        // ========== Bagian WebView (login Google langsung) ==========
         webContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
         }
 
-        // Bar atas WebView
         val webBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(38), dp(12), dp(8))
             setBackgroundColor(0xF00D1321.toInt())
         }
-        val btnClose = tv("← Batal", 13f, Pal.text, true).apply {
+        val btnClose = tv("← Kembali", 13f, Pal.text, true).apply {
             background = shape(Pal.glass, 14, Pal.edge)
             setPadding(dp(12), dp(8), dp(12), dp(8))
-            setOnClickListener { closeWeb() }
+            setOnClickListener {
+                if (GoogleAuth.signedIn(this@GoogleActivity)) closeWeb() else finish()
+            }
         }
-        val webTitle = tv("Masuk Akun Google", 13.5f, Pal.text, true).apply {
+        val webTitle = tv("Login Akun Google", 13.5f, Pal.text, true).apply {
             gravity = Gravity.CENTER
             setPadding(dp(8), 0, dp(8), 0)
         }
-        val btnDone = tv("✓ Selesai", 13f, Color.WHITE, true).apply {
+        val btnDone = tv("✓ Simpan", 13f, Color.WHITE, true).apply {
             background = grad(14)
             setPadding(dp(12), dp(8), dp(12), dp(8))
             setOnClickListener {
                 CookieManager.getInstance().flush()
                 GoogleAuth.saveWebSession(this@GoogleActivity)
                 Toast.makeText(this@GoogleActivity, "✅ Sesi Google disimpan", Toast.LENGTH_SHORT).show()
-                closeWeb()
+                finish()
             }
         }
         webBar.addView(btnClose, LinearLayout.LayoutParams(-2, -2))
         webBar.addView(webTitle, LinearLayout.LayoutParams(0, -2, 1f))
         webBar.addView(btnDone, LinearLayout.LayoutParams(-2, -2))
 
-        // Progress bar
         webProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             val pg = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(Pal.cyan, Pal.violet))
             progressDrawable = ClipDrawable(pg, Gravity.START, ClipDrawable.HORIZONTAL)
         }
 
-        // WebView
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -113,7 +109,8 @@ class GoogleActivity : Activity() {
             settings.displayZoomControls = false
             settings.useWideViewPort = true
             settings.loadWithOverviewMode = true
-            settings.userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+            // User-Agent Chrome Android resmi agar Google tidak memblokir WebView
+            settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
             CookieManager.getInstance().setAcceptCookie(true)
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -129,17 +126,18 @@ class GoogleActivity : Activity() {
                 override fun onPageStarted(v: WebView?, url: String?, favicon: Bitmap?) {
                     checkLoginStatus(url ?: "")
                 }
+
                 override fun onPageFinished(v: WebView?, url: String?) {
-                    checkLoginStatus(url ?: "")
-                    // Coba ekstrak email dari halaman
+                    // Ekstrak email Google yang sedang login (mendukung akun kampus maupun Gmail biasa)
                     v?.evaluateJavascript(
-                        "(function(){var e=document.querySelector('[data-email]');return e?e.getAttribute('data-email'):'';})()"
+                        "(function(){var e=document.querySelector('[data-email]')||document.querySelector('[data-identifier]');return e?(e.getAttribute('data-email')||e.getAttribute('data-identifier')):'';})()"
                     ) { result ->
                         val email = result?.trim()?.removeSurrounding("\"") ?: ""
-                        if (email.contains("@") && email.endsWith("@${GoogleAuth.DOMAIN}", true)) {
+                        if (email.contains("@")) {
                             prefs().edit().putString("gEmail", email).apply()
                         }
                     }
+                    checkLoginStatus(url ?: "")
                 }
             }
         }
@@ -152,26 +150,41 @@ class GoogleActivity : Activity() {
         root.addView(webContainer, LinearLayout.LayoutParams(-1, -1))
 
         setContentView(root)
-        drawMenu()
+
+        // Jika belum login, LANGSUNG buka halaman login Google tanpa menu perantara!
+        if (!GoogleAuth.signedIn(this)) {
+            openWeb()
+        } else {
+            drawMenu()
+        }
     }
 
-    /** Periksa apakah user sudah berhasil masuk Google berdasarkan URL dan cookies. */
+    /** Periksa apakah user sudah berhasil masuk Google berdasarkan cookies Google. */
     private fun checkLoginStatus(url: String) {
         if (loginDetected) return
-        val isOnDrive = url.contains("drive.google.com") ||
-                url.contains("myaccount.google.com") ||
-                url.contains("google.com/drive")
-        if (!isOnDrive) return
+        val cm = CookieManager.getInstance()
+        cm.flush()
 
-        CookieManager.getInstance().flush()
-        val ck = CookieManager.getInstance().getCookie("https://drive.google.com") ?: ""
-        val loggedIn = ck.contains("SID=") || ck.contains("SAPISID=") || ck.contains("__Secure-1PSID")
-        if (loggedIn) {
+        val ckDrive = cm.getCookie("https://drive.google.com") ?: ""
+        val ckAcc = cm.getCookie("https://accounts.google.com") ?: ""
+        val allCookies = "$ckDrive; $ckAcc"
+
+        val hasAuthCookie = allCookies.contains("SID=") ||
+                allCookies.contains("SAPISID=") ||
+                allCookies.contains("__Secure-1PSID=") ||
+                allCookies.contains("__Secure-3PSID=")
+
+        val finishedLoginFlow = url.contains("drive.google.com") ||
+                url.contains("myaccount.google.com") ||
+                url.contains("ManageAccount") ||
+                url.contains("google.com/drive")
+
+        if (hasAuthCookie && finishedLoginFlow) {
             loginDetected = true
             GoogleAuth.saveWebSession(this)
             ui.post {
                 Toast.makeText(this, "✅ Berhasil masuk akun Google!", Toast.LENGTH_LONG).show()
-                closeWeb()
+                finish() // Langsung kembali ke halaman utama aplikasi setelah login berhasil
             }
         }
     }
@@ -181,7 +194,6 @@ class GoogleActivity : Activity() {
         loginDetected = false
         menuScroll.visibility = View.GONE
         webContainer.visibility = View.VISIBLE
-        // Arahkan ke login Google → redirect ke Drive setelah berhasil
         webView.loadUrl("https://accounts.google.com/ServiceLogin?service=wise&passive=1209600&continue=https%3A%2F%2Fdrive.google.com%2Fdrive%2Fmy-drive&hl=id")
     }
 
@@ -193,11 +205,9 @@ class GoogleActivity : Activity() {
         drawMenu()
     }
 
-    /** Gambar tampilan menu utama (sebelum & sesudah login). */
     private fun drawMenu() {
         menuBox.removeAllViews()
 
-        // Header dengan tombol kembali
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -213,32 +223,23 @@ class GoogleActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, 0, 0)
             addView(tv("GOOGLE DRIVE", 11f, Pal.cyan, true).apply { letterSpacing = 0.2f })
-            addView(tv("Hubungkan akun Google", 22f, Pal.text, true))
+            addView(tv("Akun Google Terhubung", 22f, Pal.text, true))
         }
         header.addView(btnBack, LinearLayout.LayoutParams(-2, -2))
         header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
         menuBox.addView(header)
 
-        menuBox.addView(tv(
-            "Supaya aplikasi bisa membaca PDF materi yang ditautkan dosen ke Google Drive (tombol \"Lihat\" di ELITA). Aplikasi hanya meminta izin baca, tidak bisa mengubah atau menghapus file.",
-            13f, Pal.mute
-        ).apply { setPadding(0, dp(4), 0, dp(16)) })
-
         if (GoogleAuth.signedIn(this)) {
-            // ---- Sudah login ----
-            val em = GoogleAuth.email(this).ifBlank { "Akun Google kampus" }
+            val em = GoogleAuth.email(this).ifBlank { "Akun Google Aktif" }
             menuBox.addView(card().apply {
                 background = shape(tint(Pal.green, 30), 22, tint(Pal.green, 100))
                 addView(chip("✅ TERHUBUNG", Pal.green))
                 addView(tv(em, 18f, Pal.text, true).apply { setPadding(0, dp(10), 0, dp(4)) })
-                addView(tv("File materi PDF dosen di Google Drive bisa langsung dibuka di aplikasi. Ketuk materi ☁ di tab Kuliah.", 13f, Pal.mute).apply {
+                addView(tv("Sesi Google Drive aktif. Kamu bisa langsung membuka PDF dosen atau drag & drop PDF ke aplikasi.", 13f, Pal.mute).apply {
                     setPadding(0, dp(4), 0, dp(12))
                 })
                 addView(row(
-                    ghost("📂 Buka Google Drive") {
-                        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://drive.google.com")).setPackage("com.google.android.apps.docs")) }
-                        catch (_: Exception) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://drive.google.com"))) }
-                    },
+                    ghost("🔄 Ganti Akun") { openWeb() },
                     ghost("Keluar", Pal.red) {
                         GoogleAuth.signOut(this@GoogleActivity)
                         drawMenu()
@@ -246,48 +247,22 @@ class GoogleActivity : Activity() {
                 ))
             })
         } else {
-            // ---- Belum login ----
             menuBox.addView(card().apply {
                 addView(tv("Belum terhubung", 16f, Pal.text, true).apply { setPadding(0, 0, 0, dp(10)) })
-
-                val btnLogin = TextView(this@GoogleActivity).apply {
-                    text = "🔑  Masuk dengan Google"
-                    setTextColor(Color.WHITE)
+                addView(gpill("🔑  Login ke Google Sekarang") { openWeb() }.apply {
                     textSize = 15f
-                    setTypeface(null, android.graphics.Typeface.BOLD)
-                    gravity = Gravity.CENTER
-                    background = grad(20)
                     setPadding(dp(16), dp(14), dp(16), dp(14))
-                    setOnClickListener { openWeb() }
-                }
-                addView(btnLogin, LinearLayout.LayoutParams(-1, -2))
-
-                addView(tv(
-                    "Halaman login resmi Google dibuka di dalam aplikasi. Kata sandi TIDAK disimpan di aplikasi ini.",
-                    11.5f, Pal.mute
-                ).apply {
-                    setPadding(0, dp(12), 0, 0)
-                    gravity = Gravity.CENTER
-                })
+                }, LinearLayout.LayoutParams(-1, -2))
             })
         }
-
-        // Alternatif tanpa login
-        menuBox.addView(card().apply {
-            addView(label("Tanpa login (tetap bisa)"))
-            addView(tv(
-                "1. Di aplikasi Google Drive HP, buka file materi.\n" +
-                "2. Ketuk ⋮ → Kirim salinan → Pilih \"Tugas Kampus\".\n" +
-                "3. PDF langsung terbuka di aplikasi dan bisa diringkas AI.",
-                13f, Pal.text
-            ).apply { setLineSpacing(dp(3).toFloat(), 1.1f) })
-        })
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (isWebMode) {
-            if (webView.canGoBack()) webView.goBack() else closeWeb()
+            if (webView.canGoBack()) webView.goBack()
+            else if (GoogleAuth.signedIn(this)) closeWeb()
+            else finish()
         } else {
             super.onBackPressed()
         }
