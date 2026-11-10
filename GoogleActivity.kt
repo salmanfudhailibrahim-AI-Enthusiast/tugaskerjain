@@ -109,7 +109,6 @@ class GoogleActivity : Activity() {
             settings.displayZoomControls = false
             settings.useWideViewPort = true
             settings.loadWithOverviewMode = true
-            // User-Agent Chrome Android resmi agar Google tidak memblokir WebView
             settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
             CookieManager.getInstance().setAcceptCookie(true)
@@ -128,7 +127,6 @@ class GoogleActivity : Activity() {
                 }
 
                 override fun onPageFinished(v: WebView?, url: String?) {
-                    // Ekstrak email Google yang sedang login (mendukung akun kampus maupun Gmail biasa)
                     v?.evaluateJavascript(
                         "(function(){var e=document.querySelector('[data-email]')||document.querySelector('[data-identifier]');return e?(e.getAttribute('data-email')||e.getAttribute('data-identifier')):'';})()"
                     ) { result ->
@@ -151,7 +149,6 @@ class GoogleActivity : Activity() {
 
         setContentView(root)
 
-        // Jika belum login, LANGSUNG buka halaman login Google tanpa menu perantara!
         if (!GoogleAuth.signedIn(this)) {
             openWeb()
         } else {
@@ -159,7 +156,6 @@ class GoogleActivity : Activity() {
         }
     }
 
-    /** Periksa apakah user sudah berhasil masuk Google berdasarkan cookies Google. */
     private fun checkLoginStatus(url: String) {
         if (loginDetected) return
         val cm = CookieManager.getInstance()
@@ -184,7 +180,7 @@ class GoogleActivity : Activity() {
             GoogleAuth.saveWebSession(this)
             ui.post {
                 Toast.makeText(this, "✅ Berhasil masuk akun Google!", Toast.LENGTH_LONG).show()
-                finish() // Langsung kembali ke halaman utama aplikasi setelah login berhasil
+                finish()
             }
         }
     }

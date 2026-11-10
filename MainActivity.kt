@@ -90,7 +90,6 @@ class MainActivity : Activity() {
         if (cur.moveToFirst() && i >= 0) cur.getString(i) else null
     } ?: u.lastPathSegment?.substringAfterLast('/') ?: "berkas.pdf"
 
-    /** Menyalin URI yang di-drag/dipilih ke cache aplikasi agar selalu bisa dibuka di PdfActivity & AI tanpa mental ke ELITA. */
     private fun cacheUriToAtt(u: Uri): Att? {
         return try {
             val rawName = nameOf(u)
@@ -106,7 +105,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Tangkap PDF jika dibuka dari luar ("Buka dengan" / Share ke aplikasi). */
     private fun handleIncomingIntent(d: Intent?) {
         if (d == null) return
         val u: Uri? = when (d.action) {
@@ -126,7 +124,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Pasang penerima Drag & Drop PDF di seluruh layar aplikasi. */
     private fun attachDragAndDrop(targetView: View) {
         targetView.setOnDragListener { _, event ->
             when (event.action) {
@@ -176,7 +173,6 @@ class MainActivity : Activity() {
                             } else {
                                 picked.addAll(droppedAtts)
                                 render()
-                                // Langsung tawarkan buka di pembaca PDF internal atau ringkas dengan AI
                                 val first = droppedAtts.first()
                                 AlertDialog.Builder(this@MainActivity)
                                     .setTitle("📄 ${first.name}")
@@ -245,7 +241,6 @@ class MainActivity : Activity() {
         startActivity(i)
     }
 
-    /** Kartu area Drag & Drop PDF agar user bisa langsung tarik PDF ke aplikasi tanpa lewat ELITA. */
     private fun dropZoneCard(): View = card().apply {
         background = shape(tint(Pal.cyan, 20), 18, tint(Pal.cyan, 90))
         addView(tv("📥 Drag & Drop PDF ke Aplikasi", 14f, Pal.cyan, true))
@@ -363,7 +358,6 @@ class MainActivity : Activity() {
 
     private fun courses() = loadCourses(this)
 
-    /** Nama berkas dengan ikon: ☁ = Google Drive, 📄 = berkas langsung. */
     private fun attName(a: Att): String = (if (a.url?.let { Drive.isDrive(it) } == true) "☁ " else "📄 ") + a.name
 
     /* ---------------- Tab Tugas ---------------- */
@@ -449,7 +443,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Daftar PDF materi satu mata kuliah; ketuk untuk membuka di pembaca PDF aplikasi. */
     private fun materiDialog(k: Crs) {
         toast("Mengambil daftar materi...")
         thread {
@@ -465,12 +458,10 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Membuka berkas: selalu langsung buka di pembaca PDF di dalam aplikasi. */
     private fun openAtt(a: Att) {
         openPdf(a)
     }
 
-    /** Tidak ada PDF otomatis: langsung arahkan Drag & Drop / Pilih PDF ke aplikasi tanpa membuka ELITA. */
     private fun emptyMateri(k: Crs) {
         AlertDialog.Builder(this).setTitle("Masukkan PDF ke Aplikasi")
             .setMessage("Belum ada PDF otomatis di ${k.name}.\n\nKamu bisa langsung Drag & Drop file PDF ke layar aplikasi ini, atau pilih file PDF dari HP untuk langsung dibuka di aplikasi.")
@@ -487,7 +478,6 @@ class MainActivity : Activity() {
         tab = 2; loadPdfs(); render()
     }
 
-    /** Daftar PDF mata kuliah terpilih dimuat otomatis; 3 berkas pertama langsung dicentang. */
     private fun loadPdfs() {
         val crs = if (sCourse > 0) courses().getOrNull(sCourse - 1) else null
         sPdfs = emptyList(); sOn.clear()
@@ -628,4 +618,121 @@ class MainActivity : Activity() {
         val ok = CheckBox(this).apply { text = "Saya sudah meninjau jawaban ini dan siap mengumpulkan"; setTextColor(Pal.text); textSize = 13f }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0)
-            addView(tv(t.title, 14
+            addView(tv(t.title, 14f, Pal.cyan, true).apply { setPadding(0, 0, 0, dp(8)) })
+            addView(et)
+            addView(row(ghost("📎 Lampirkan / Drag file") { pickAny() }))
+            addView(info); addView(ok)
+        }
+        attachDragAndDrop(box)
+        val d = AlertDialog.Builder(this).setTitle("Kumpulkan tugas").setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Kumpulkan", null).setNegativeButton("Batal", null).create()
+        d.setOnDismissListener { subDialogShowing = false }
+        d.setOnShowListener {
+            subDialogShowing = true
+            val b = d.getButton(AlertDialog.BUTTON_POSITIVE)
+            b.isEnabled = false
+            ok.setOnCheckedChangeListener { _, v -> b.isEnabled = v }
+            b.setOnClickListener {
+                b.isEnabled = false; d.setTitle("Mengirim...")
+                val files = subFiles.toList(); val txt = et.text.toString()
+                thread {
+                    var msg = ""; var err: String? = null
+                    try { msg = Submit.send(this, t, txt, files) } catch (e: Exception) { err = e.message ?: "gagal" }
+                    ui.post {
+                        d.setTitle("Kumpulkan tugas")
+                        if (err != null) { b.isEnabled = ok.isChecked; toast("Gagal: $err") }
+                        else {
+                            d.dismiss()
+                            val dn = prefs().getStringSet("done", emptySet())!!.toMutableSet(); dn.add(t.id)
+                            prefs().edit().putStringSet("done", dn).apply(); render()
+                            AlertDialog.Builder(this).setTitle("Berhasil").setMessage(msg).setPositiveButton("OK", null).show()
+                        }
+                    }
+                }
+            }
+        }
+        d.show()
+    }
+
+    /* ---------------- Update aplikasi ---------------- */
+    private fun updateCard(i: Updater.Info) = card().apply {
+        background = shape(tint(Pal.green, 36), 22, tint(Pal.green, 120))
+        addView(tv("⬆️ Pembaruan tersedia (versi ${i.code})", 15f, Pal.green, true))
+        if (i.notes.isNotBlank()) addView(tv(i.notes.trim().take(160), 12f, Pal.mute).apply { setPadding(0, dp(4), 0, 0) })
+        addView(row(gpill("Perbarui sekarang") { startUpdate(i) }))
+    }
+
+    private fun startUpdate(i: Updater.Info) {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            toast("Izinkan 'Pasang aplikasi tidak dikenal' untuk aplikasi ini, lalu tekan Perbarui lagi.")
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            return
+        }
+        val dlg = AlertDialog.Builder(this).setTitle("Pembaruan").setMessage("Mengunduh versi ${i.code}...").setCancelable(false).show()
+        thread {
+            val err = try { Updater.install(this, i.url); null } catch (e: Exception) { e.message ?: "gagal" }
+            ui.post { dlg.dismiss(); if (err != null) toast("Gagal memperbarui: $err") }
+        }
+    }
+
+    /* ---------------- Pengaturan Modern ---------------- */
+    private fun settings() {
+        val p = prefs()
+        val sp = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("Moodle (ELITA)", "Canvas"))
+            setSelection(if (p.str("platform") == "canvas") 1 else 0)
+        }
+        fun f(h: String, k: String, d: String = "") = field(h).apply { setText(p.str(k, d)); setSingleLine() }
+        val url = f("URL web kampus, mis. https://elita.untidar.ac.id", "baseUrl", "https://elita.untidar.ac.id")
+        val min = f("Cek otomatis tiap (menit, minimal 15)", "syncMin", "30")
+        val hrs = f("Pengingat sebelum deadline (jam, pisah koma)", "hours", "24,6,1")
+        val key = f("API key Anthropic milikmu (sk-ant-...)", "apiKey").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        val model = f("Model AI", "model", "claude-sonnet-5-5")
+        val token = f("Token Moodle (opsional untuk kumpulkan tugas)", "token").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        val getTok = ghost("Ambil token di web kampus") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url.text.toString().trim().trimEnd('/') + "/user/managetoken.php"))) }
+
+        val gStatusText = if (GoogleAuth.signedIn(this)) "✅ Akun Google: " + GoogleAuth.email(this) else "🔑 Masuk Akun Google Kampus (Langsung Login)"
+        val gd = ghost(gStatusText) { startActivity(Intent(this, GoogleActivity::class.java)) }
+
+        val upd = ghost("Cek pembaruan (versi ${Updater.current(this)})") {
+            if (Updater.slug(this).isBlank()) { toast("Build lokal: repo GitHub belum diatur."); return@ghost }
+            thread {
+                val n = Updater.refresh(this, false)
+                ui.post { toast(if (n != null) "Versi ${n.code} tersedia" else "Sudah versi terbaru"); render() }
+            }
+        }
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0)
+
+            addView(label("Sistem Kampus (ELITA / Moodle)"))
+            addView(sp, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
+            addView(url, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            addView(token, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            addView(getTok, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+
+            addView(label("Akun Google Kampus (Tanpa Client ID)").apply { setPadding(0, dp(14), 0, dp(4)) })
+            addView(gd, LinearLayout.LayoutParams(-1, -2))
+
+            addView(label("Kecerdasan Buatan (Anthropic AI)").apply { setPadding(0, dp(14), 0, dp(4)) })
+            addView(key, LinearLayout.LayoutParams(-1, -2))
+            addView(model, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+
+            addView(label("Sinkronisasi & Notifikasi").apply { setPadding(0, dp(14), 0, dp(4)) })
+            addView(min, LinearLayout.LayoutParams(-1, -2))
+            addView(hrs, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+
+            addView(label("Aplikasi").apply { setPadding(0, dp(14), 0, dp(4)) })
+            addView(upd, LinearLayout.LayoutParams(-1, -2))
+        }
+
+        AlertDialog.Builder(this).setTitle("Pengaturan").setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Simpan") { _, _ ->
+                p.edit().putString("platform", if (sp.selectedItemPosition == 1) "canvas" else "moodle")
+                    .putString("baseUrl", url.text.toString().trim().trimEnd('/')).putString("token", token.text.toString().trim()).putString("syncMin", min.text.toString())
+                    .putString("hours", hrs.text.toString()).putString("apiKey", key.text.toString().trim())
+                    .putString("model", model.text.toString().ifBlank { "claude-sonnet-5-5" }).apply()
+                Sync.periodic(this); sync()
+            }.setNegativeButton("Batal", null).show()
+    }
+}
