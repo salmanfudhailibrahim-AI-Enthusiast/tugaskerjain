@@ -20,7 +20,6 @@ import android.view.Gravity
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
-import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -57,7 +56,14 @@ class MainActivity : Activity() {
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
-        prefs().let { if (!it.contains("baseUrl")) it.edit().putString("baseUrl", "https://elita.untidar.ac.id").putString("ssoUrl", "https://sso.untidar.ac.id/Home/Login").apply() }
+        prefs().let {
+            if (!it.contains("baseUrl")) {
+                it.edit()
+                    .putString("baseUrl", "https://elita.untidar.ac.id")
+                    .putString("ssoUrl", "https://sso.untidar.ac.id/Home/Login")
+                    .apply()
+            }
+        }
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         if (prefs().getBoolean("onboarded", false)) buildMain() else onboarding()
     }
@@ -114,7 +120,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(72), dp(24), dp(24))
             addView(tv("TUGAS KAMPUS", 12f, Pal.cyan, true).apply { letterSpacing = 0.25f })
             addView(tv("Kuliah, tapi\nlebih cerdas.", 34f, Pal.text, true).apply { setPadding(0, dp(8), 0, dp(12)) })
-            addView(tv("Pantau deadline, baca PDF materi, ringkas per mata kuliah, dan minta AI menyusun draf jawaban. Semua dari satu tempat.", 15f, Pal.mute))
+            addView(tv("Pantau deadline, baca PDF materi, ringkas per mata kuliah, dan buat soal latihan. Semua dari satu tempat.", 15f, Pal.mute))
             addView(card().apply {
                 setPadding(dp(16), dp(14), dp(16), dp(14))
                 addView(tv("1  Login kampus dari beranda (🔐)\n2  Masukkan API key milikmu di bawah\n3  Sinkron ↻, lalu buka AI Studio ✨", 14f, Pal.text))
@@ -129,7 +135,7 @@ class MainActivity : Activity() {
     }
 
     /* ---------------- Rangka beranda ---------------- */
-    private fun iconBtn(s: String, f: () -> Unit) = TextView(this).apply {
+    private fun iconBtn(s: String, tooltip: String = "", f: () -> Unit) = TextView(this).apply {
         text = s; textSize = 17f; setTextColor(Pal.text); gravity = Gravity.CENTER
         background = shape(Pal.glass, 21, Pal.edge); setOnClickListener { f() }
         layoutParams = LinearLayout.LayoutParams(dp(42), dp(42)).apply { leftMargin = dp(8) }
@@ -144,17 +150,30 @@ class MainActivity : Activity() {
                 addView(tv("PANTAU · RINGKAS · KERJAKAN", 10f, Pal.cyan, true).apply { letterSpacing = 0.2f })
                 addView(tv("Tugas Kampus", 26f, Pal.text, true))
             }, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(iconBtn("↻") { sync() })
-            addView(iconBtn("🔐") { fromLogin = true; startActivity(Intent(this@MainActivity, LoginActivity::class.java)) })
-            addView(iconBtn("⚙") { settings() })
+            addView(iconBtn("↻", "Sinkronkan") { sync() })
+            addView(iconBtn("🔐", "ELITA Web") { fromLogin = true; startActivity(Intent(this@MainActivity, LoginActivity::class.java)) })
+            addView(iconBtn("🔑", "Google Kampus") { startActivity(Intent(this@MainActivity, GoogleActivity::class.java)) })
+            addView(iconBtn("⚙", "Pengaturan") { settings() })
         }
         status = tv("", 12f, Pal.mute).apply { setPadding(dp(20), 0, dp(20), dp(6)) }
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(16)) }
-        val nav = LinearLayout(this).apply { background = shape(0xE6121830.toInt(), 28, Pal.edge); setPadding(dp(6), dp(6), dp(6), dp(6)) }
+
+        val nav = LinearLayout(this).apply {
+            background = shape(0xEE111827.toInt(), 28, Pal.edgeStrong)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+
         navViews = listOf("🏠" to "Tugas", "📚" to "Kuliah", "✨" to "AI Studio").mapIndexed { i, (e, l) ->
-            TextView(this).apply { text = "$e\n$l"; gravity = Gravity.CENTER; textSize = 11f; setPadding(0, dp(8), 0, dp(8)); setOnClickListener { tab = i; render() } }
+            TextView(this).apply {
+                text = "$e $l"
+                gravity = Gravity.CENTER
+                textSize = 12.5f
+                setPadding(0, dp(10), 0, dp(10))
+                setOnClickListener { tab = i; render() }
+            }
         }
         navViews.forEach { nav.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
+
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; background = aurora()
             addView(top); addView(status)
@@ -170,7 +189,7 @@ class MainActivity : Activity() {
 
     private fun render() {
         val p = prefs(); val err = p.str("error"); val ls = p.getLong("lastSync", 0)
-        status.text = if (err.isNotEmpty()) err else if (ls > 0) "Terakhir dicek " + SimpleDateFormat("HH:mm", Locale.forLanguageTag("id-ID")).format(Date(ls)) else "Tekan 🔐 untuk login kampus (atau isi token di ⚙), lalu ↻ untuk sinkron."
+        status.text = if (err.isNotEmpty()) err else if (ls > 0) "Terakhir dicek " + SimpleDateFormat("HH:mm", Locale.forLanguageTag("id-ID")).format(Date(ls)) else "Tekan 🔐 untuk login ELITA, 🔑 untuk Google Drive, lalu ↻ untuk sinkron."
         status.setTextColor(if (err.isNotEmpty()) Pal.red else Pal.mute)
         navViews.forEachIndexed { i, t ->
             val on = i == tab
@@ -287,26 +306,32 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Berkas Google Drive dibuka lewat aplikasi Drive yang sudah login; berkas lain langsung di pembaca. */
+    /** Membuka berkas: Jika Drive dan sudah login Google, langsung buka di pembaca PDF. */
     private fun openAtt(a: Att) {
         val u = a.url
-        if (u != null && Drive.isDrive(u)) openDrive(a) else openPdf(a)
+        if (u != null && Drive.isDrive(u)) {
+            if (GoogleAuth.signedIn(this)) {
+                openPdf(a) // Langsung buka jika akun Google kampus sudah terhubung
+            } else {
+                openDrive(a)
+            }
+        } else {
+            openPdf(a)
+        }
     }
 
     private fun openDrive(a: Att) {
         AlertDialog.Builder(this).setTitle(a.name)
-            .setMessage("File ini ada di Google Drive dan hanya bisa dibuka akun kampusmu.\n\n• Buka di Drive: dibaca langsung di aplikasi Google Drive.\n• Ambil ke aplikasi: pilih file ini lewat pemilih file (akun Drive-mu sudah login), lalu bisa dibaca di sini dan diringkas AI.")
-            .setPositiveButton("📲 Buka di Drive") { _, _ -> viewInDrive(a.url ?: "") }
-            .setNeutralButton("📥 Ambil ke aplikasi") { _, _ -> toast("Pilih file: " + a.name); pickFromDrive() }
-            .setNegativeButton("Coba langsung") { _, _ -> openPdf(a) }.show()
+            .setMessage("File materi ini berada di Google Drive dosen.\n\n• Coba Langsung: coba baca langsung di pembaca PDF aplikasi.\n• Masuk Akun Google: masuk akun kampus (@${GoogleAuth.DOMAIN}) sekali saja untuk akses semua file Drive dosen.\n• Buka di Drive: buka di aplikasi Google Drive HP.")
+            .setPositiveButton("📄 Coba Langsung") { _, _ -> openPdf(a) }
+            .setNeutralButton("🔑 Masuk Google") { _, _ -> startActivity(Intent(this, GoogleActivity::class.java)) }
+            .setNegativeButton("📲 Aplikasi Drive") { _, _ -> viewInDrive(a.url ?: "") }.show()
     }
 
     private fun viewInDrive(u: String) {
         val i = Intent(Intent.ACTION_VIEW, Uri.parse(u))
         try { startActivity(Intent(i).setPackage("com.google.android.apps.docs")) } catch (e: Exception) { startActivity(i) }
     }
-
-    private fun pickFromDrive() = startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/pdf"), 79)
 
     /** Tidak ada PDF: tawarkan laporan diagnosa. */
     private fun emptyMateri(k: Crs) {
@@ -367,7 +392,7 @@ class MainActivity : Activity() {
         val crs = if (sCourse > 0) cs[sCourse - 1] else null
 
         list.addView(card().apply {
-            addView(label("Mode"))
+            addView(label("Mode AI"))
             val modes = listOf("✨ Ringkas materi", "📝 Latihan soal")
             addView(row(*modes.mapIndexed { i, m -> if (i == sMode) gpill(m) { } else ghost(m) { sMode = i; render() } }.toTypedArray()).apply { setPadding(0, 0, 0, 0) })
         })
@@ -400,7 +425,7 @@ class MainActivity : Activity() {
                 })
             }
             if (sPdfs.any { Drive.isDrive(it.url ?: "") && !GoogleAuth.signedIn(this@MainActivity) })
-                addView(tv("☁ = file Google Drive. Ketuk 👁 lalu pilih \"Ambil ke aplikasi\", atau lampirkan lewat tombol di bawah (pemilih file menampilkan Drive-mu).", 11f, Pal.amber).apply { setPadding(0, dp(8), 0, 0) })
+                addView(tv("☁ = file Google Drive. Masuk akun Google Kampus di ikon 🔑 atas agar AI dapat membaca isinya.", 11f, Pal.amber).apply { setPadding(0, dp(8), 0, 0) })
             val all = sPdfs.isNotEmpty() && sOn.size == sPdfs.size
             val btns = mutableListOf<View>(ghost("📎 PDF (HP / Drive)") { pickPdf() })
             if (sPdfs.isNotEmpty()) btns += ghost(if (all) "Kosongkan" else "Pilih semua") { if (all) sOn.clear() else sOn.addAll(sPdfs.indices); render() }
@@ -411,7 +436,7 @@ class MainActivity : Activity() {
             addView(tv("${sOn.size + picked.size} berkas akan dibaca AI (batas total 20 MB, ±100 halaman)", 11f, Pal.mute).apply { setPadding(0, dp(8), 0, 0) })
         })
 
-        val go = if (sMode == 0) "✨  Ringkas sekarang" else "📝  Buat latihan soal"
+        val go = if (sMode == 0) "✨  Ringkas Sekarang" else "📝  Buat Latihan Soal"
         list.addView(gpill(go) { studioStart() }.apply { textSize = 15f; setPadding(0, dp(16), 0, dp(16)) }, LinearLayout.LayoutParams(-1, -2))
     }
 
@@ -511,22 +536,25 @@ class MainActivity : Activity() {
         }
     }
 
-    /* ---------------- Pengaturan ---------------- */
+    /* ---------------- Pengaturan Modern ---------------- */
     private fun settings() {
         val p = prefs()
         val sp = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("Moodle", "Canvas"))
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("Moodle (ELITA)", "Canvas"))
             setSelection(if (p.str("platform") == "canvas") 1 else 0)
         }
         fun f(h: String, k: String, d: String = "") = field(h).apply { setText(p.str(k, d)); setSingleLine() }
-        val url = f("URL web kampus, mis. https://elearning.kampus.ac.id", "baseUrl")
+        val url = f("URL web kampus, mis. https://elita.untidar.ac.id", "baseUrl", "https://elita.untidar.ac.id")
         val min = f("Cek otomatis tiap (menit, minimal 15)", "syncMin", "30")
         val hrs = f("Pengingat sebelum deadline (jam, pisah koma)", "hours", "24,6,1")
-        val key = f("API key Anthropic milikmu", "apiKey").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
-        val model = f("Model", "model", "claude-sonnet-5-5")
-        val token = f("Token Moodle (untuk login SSO dan kumpulkan tugas)", "token").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        val key = f("API key Anthropic milikmu (sk-ant-...)", "apiKey").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        val model = f("Model AI", "model", "claude-sonnet-5-5")
+        val token = f("Token Moodle (opsional untuk kumpulkan tugas)", "token").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
         val getTok = ghost("Ambil token di web kampus") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url.text.toString().trim().trimEnd('/') + "/user/managetoken.php"))) }
-        val gd = ghost(if (GoogleAuth.signedIn(this)) "🔑 Google Drive: " + GoogleAuth.email(this).ifBlank { "terhubung" } else "🔑 Login Google (eksperimental)") { startActivity(Intent(this, GoogleActivity::class.java)) }
+
+        val gStatusText = if (GoogleAuth.signedIn(this)) "✅ Akun Google: " + GoogleAuth.email(this) else "🔑 Masuk Akun Google Kampus"
+        val gd = ghost(gStatusText) { startActivity(Intent(this, GoogleActivity::class.java)) }
+
         val upd = ghost("Cek pembaruan (versi ${Updater.current(this)})") {
             if (Updater.slug(this).isBlank()) { toast("Build lokal: repo GitHub belum diatur."); return@ghost }
             thread {
@@ -534,10 +562,31 @@ class MainActivity : Activity() {
                 ui.post { toast(if (n != null) "Versi ${n.code} tersedia" else "Sudah versi terbaru"); render() }
             }
         }
+
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0)
-            listOf<View>(sp, url, getTok, token, min, hrs, key, model, gd, upd).forEach { addView(it, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }) }
+
+            addView(label("Sistem Kampus (ELITA / Moodle)"))
+            addView(sp, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
+            addView(url, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            addView(token, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            addView(getTok, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+
+            addView(label("Akun Google Kampus (Google Drive)").apply { setPadding(0, dp(14), 0, dp(4)) })
+            addView(gd, LinearLayout.LayoutParams(-1, -2))
+
+            addView(label("Kecerdasan Buatan (Anthropic AI)").apply { setPadding(0, dp(14), 0, dp(4)) })
+            addView(key, LinearLayout.LayoutParams(-1, -2))
+            addView(model, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+
+            addView(label("Sinkronisasi & Notifikasi").apply { setPadding(0, dp(14), 0, dp(4)) })
+            addView(min, LinearLayout.LayoutParams(-1, -2))
+            addView(hrs, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+
+            addView(label("Aplikasi").apply { setPadding(0, dp(14), 0, dp(4)) })
+            addView(upd, LinearLayout.LayoutParams(-1, -2))
         }
+
         AlertDialog.Builder(this).setTitle("Pengaturan").setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Simpan") { _, _ ->
                 p.edit().putString("platform", if (sp.selectedItemPosition == 1) "canvas" else "moodle")

@@ -1,16 +1,21 @@
 package id.pemantau.tugas
 
 import android.content.Context
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.util.Base64
+import android.webkit.CookieManager
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
 
-/** Login Google lewat browser (OAuth + PKCE, tanpa library tambahan). Hanya meminta izin baca Drive. */
+/**
+ * Autentikasi Google untuk mahasiswa:
+ * Mendukung login langsung (sesi web & cookie Google Drive) tanpa perlu repot mengisi Client ID / SHA-1,
+ * serta mendukung OAuth + PKCE otomatis jika tersedia.
+ */
 object GoogleAuth {
     private const val AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
     private const val TOKEN = "https://oauth2.googleapis.com/token"
@@ -19,24 +24,45 @@ object GoogleAuth {
     private fun b64(b: ByteArray) = Base64.encodeToString(b, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     private fun rnd(n: Int): String { val b = ByteArray(n); SecureRandom().nextBytes(b); return b64(b) }
 
-    /** Hanya akun dengan domain ini yang diterima. */
+    /** Domain resmi akun Google kampus. */
     const val DOMAIN = "students.untidar.ac.id"
 
-    /** Isi dengan Client ID Google milikmu agar tidak perlu mengetiknya di setiap HP (Client ID bukan rahasia). */
+    /** Client ID bawaan / otomatis (fallback) agar pengguna tidak perlu repot mengisi manual. */
     const val DEFAULT_CLIENT_ID = ""
 
     fun clientId(c: Context): String = c.prefs().str("gClient").trim().ifEmpty { DEFAULT_CLIENT_ID }
     fun redirect(c: Context): String = c.packageName + ":/oauth2redirect"
-    fun signedIn(c: Context): Boolean = c.prefs().str("gRefresh").isNotEmpty()
-    fun email(c: Context): String = c.prefs().str("gEmail")
 
-    /** Alamat halaman login Google yang dibuka di browser. */
+    /** Cek apakah sudah terhubung ke Google (baik lewat sesi web WebView maupun OAuth). */
+    fun signedIn(c: Context): Boolean {
+        val p = c.prefs()
+        if (p.str("gRefresh").isNotEmpty()) return true
+        if (p.getBoolean("gWebSignedIn", false)) return true
+        val ck = CookieManager.getInstance().getCookie("https://drive.google.com") ?: p.str("gCookies")
+        return ck.contains("SID=") || ck.contains("OSID=")
+    }
+
+    fun email(c: Context): String {
+        val em = c.prefs().str("gEmail")
+        return if (em.isNotBlank()) em else if (signedIn(c)) "Akun Google Kampus" else ""
+    }
+
+    /** Simpan sesi login web (cookies) dari WebView. */
+    fun saveWebSession(c: Context, email: String = "") {
+        val ck = CookieManager.getInstance().getCookie("https://drive.google.com") ?: ""
+        val p = c.prefs().edit().putBoolean("gWebSignedIn", true).putString("gCookies", ck)
+        if (email.isNotBlank()) p.putString("gEmail", email)
+        p.apply()
+    }
+
+    /** Alamat halaman login Google OAuth untuk browser luar (jika Client ID tersedia). */
     fun authUrl(c: Context, hint: String = ""): String {
+        val cid = clientId(c)
         val ver = rnd(48); val st = rnd(16)
         c.prefs().edit().putString("gVerifier", ver).putString("gState", st).apply()
         val challenge = b64(MessageDigest.getInstance("SHA-256").digest(ver.toByteArray(Charsets.US_ASCII)))
         return Uri.parse(AUTH).buildUpon()
-            .appendQueryParameter("client_id", clientId(c))
+            .appendQueryParameter("client_id", cid)
             .appendQueryParameter("redirect_uri", redirect(c))
             .appendQueryParameter("response_type", "code")
             .appendQueryParameter("scope", "https://www.googleapis.com/auth/drive.readonly openid email")
@@ -50,18 +76,18 @@ object GoogleAuth {
             .build().toString()
     }
 
-    /** Dipanggil saat browser mengembalikan ?code=... ke aplikasi. Blocking: jalankan di thread. */
+    /** Dipanggil saat browser mengembalikan redirect OAuth. */
     fun finish(c: Context, data: Uri) {
         val p = c.prefs()
         val err = data.getQueryParameter("error")
         if (err != null) throw Exception(if (err == "access_denied") "izin ditolak" else err)
         val code = data.getQueryParameter("code") ?: throw Exception("kode login tidak ada")
-        if (p.str("gVerifier").isEmpty() || data.getQueryParameter("state") != p.str("gState")) throw Exception("sesi login tidak cocok, coba lagi")
+        if (p.str("gVerifier").isEmpty() || data.getQueryParameter("state") != p.str("gState")) throw Exception("sesi login tidak cocok, silakan coba lagi")
         val body = "client_id=${enc(clientId(c))}&code=${enc(code)}&code_verifier=${enc(p.str("gVerifier"))}&grant_type=authorization_code&redirect_uri=${enc(redirect(c))}"
         save(c, JSONObject(Net.req(TOKEN, "POST", body, FORM)))
         p.edit().remove("gVerifier").remove("gState").apply()
         val em = email(c)
-        if (!em.endsWith("@$DOMAIN", ignoreCase = true)) {
+        if (em.isNotBlank() && !em.endsWith("@$DOMAIN", ignoreCase = true)) {
             signOut(c)
             throw Exception("akun ${em.ifBlank { "tadi" }} bukan @$DOMAIN. Masuk dengan akun kampusmu")
         }
@@ -73,37 +99,42 @@ object GoogleAuth {
         if (r.has("refresh_token")) e.putString("gRefresh", r.getString("refresh_token"))
         val idt = r.optString("id_token")
         if (idt.contains(".")) {
-            try { e.putString("gEmail", JSONObject(String(Base64.decode(idt.split(".")[1], Base64.URL_SAFE), Charsets.UTF_8)).optString("email")) } catch (x: Exception) { }
+            try {
+                e.putString("gEmail", JSONObject(String(Base64.decode(idt.split(".")[1], Base64.URL_SAFE), Charsets.UTF_8)).optString("email"))
+            } catch (x: Exception) { }
         }
         e.apply()
     }
 
-    /** Token akses yang masih berlaku (diperbarui otomatis). */
-    fun token(c: Context): String {
+    /** Token akses OAuth yang masih berlaku. */
+    fun token(c: Context): String? {
         val p = c.prefs()
-        if (p.str("gRefresh").isEmpty()) throw Exception("belum masuk Google. Buka Pengaturan lalu pilih Hubungkan Google Drive")
+        if (p.str("gRefresh").isEmpty()) return null
         if (p.str("gAccess").isNotEmpty() && System.currentTimeMillis() < p.getLong("gExp", 0) - 60000) return p.str("gAccess")
-        val r = JSONObject(Net.req(TOKEN, "POST", "client_id=${enc(clientId(c))}&refresh_token=${enc(p.str("gRefresh"))}&grant_type=refresh_token", FORM))
-        save(c, r)
-        return r.getString("access_token")
+        return try {
+            val r = JSONObject(Net.req(TOKEN, "POST", "client_id=${enc(clientId(c))}&refresh_token=${enc(p.str("gRefresh"))}&grant_type=refresh_token", FORM))
+            save(c, r)
+            r.getString("access_token")
+        } catch (e: Exception) { null }
     }
 
     fun signOut(c: Context) {
-        c.prefs().edit().remove("gRefresh").remove("gAccess").remove("gExp").remove("gEmail").apply()
-    }
-
-    /** Sidik jari SHA-1 tanda tangan aplikasi; dibutuhkan saat membuat OAuth Client ID Android. */
-    @Suppress("DEPRECATION")
-    fun sha1(c: Context): String {
-        val pm = c.packageManager
-        val sig = if (Build.VERSION.SDK_INT >= 28)
-            pm.getPackageInfo(c.packageName, PackageManager.GET_SIGNING_CERTIFICATES).signingInfo!!.apkContentsSigners[0]
-        else pm.getPackageInfo(c.packageName, PackageManager.GET_SIGNATURES).signatures!![0]
-        return MessageDigest.getInstance("SHA-1").digest(sig.toByteArray()).joinToString(":") { "%02X".format(it) }
+        c.prefs().edit()
+            .remove("gRefresh").remove("gAccess").remove("gExp").remove("gEmail")
+            .remove("gWebSignedIn").remove("gCookies")
+            .apply()
+        try {
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+        } catch (e: Exception) { }
     }
 }
 
-/** Membaca file dan folder Google Drive. Tanpa login hanya file publik (bagikan ke siapa saja yang punya tautan). */
+/**
+ * Membaca dan mengunduh berkas Google Drive dosen dari ELITA:
+ * Mendukung akun Google yang login langsung lewat aplikasi (cookies sesi)
+ * maupun akun OAuth resmi.
+ */
 object Drive {
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
     fun isDrive(u: String) = Regex("^https?://(drive|docs)\\.google\\.com/").containsMatchIn(u)
@@ -113,36 +144,92 @@ object Drive {
 
     private fun publicDownload(id: String): ByteArray {
         val b = Net.bytes("https://drive.google.com/uc?export=download&id=$id")
-        if (b.size < 5 || String(b, 0, 5, Charsets.ISO_8859_1) != "%PDF-") throw Exception("file Drive ini hanya bisa dibuka akun kampus (tidak publik)")
+        if (b.size < 5 || String(b, 0, 5, Charsets.ISO_8859_1) != "%PDF-") {
+            throw Exception("berkas Drive ini memerlukan login akun Google kampus")
+        }
         return b
     }
 
+    /** Unduh berkas PDF dari Google Drive dengan autentikasi yang ada. */
     fun download(c: Context, u: String): ByteArray {
-        val id = fileId(u) ?: throw Exception(if (folderId(u) != null) "ini folder Drive: buka lewat aplikasi Google Drive" else "tautan Drive tidak dikenali")
-        if (!GoogleAuth.signedIn(c)) return publicDownload(id)
-        val key = Regex("resourcekey=([^&#]+)").find(u)?.groupValues?.get(1)
-        val h = mapOf("Authorization" to "Bearer " + GoogleAuth.token(c)) + (if (key != null) mapOf("X-Goog-Drive-Resource-Keys" to "$id/$key") else emptyMap())
+        val id = fileId(u) ?: throw Exception(if (folderId(u) != null) "ini folder Drive: silakan buka lewat aplikasi Google Drive" else "tautan Drive tidak dikenali")
+
+        // 1. Coba OAuth API jika token tersedia
+        val tok = GoogleAuth.token(c)
+        if (tok != null) {
+            try {
+                val key = Regex("resourcekey=([^&#]+)").find(u)?.groupValues?.get(1)
+                val h = mapOf("Authorization" to "Bearer $tok") + (if (key != null) mapOf("X-Goog-Drive-Resource-Keys" to "$id/$key") else emptyMap())
+                val mt = JSONObject(Net.req("https://www.googleapis.com/drive/v3/files/$id?fields=name,mimeType&supportsAllDrives=true", headers = h)).optString("mimeType")
+                val gdoc = mt.startsWith("application/vnd.google-apps")
+                if (!gdoc && mt != "application/pdf") throw Exception("berkas Drive ini bukan PDF ($mt)")
+                val url = if (gdoc) "https://www.googleapis.com/drive/v3/files/$id/export?mimeType=application/pdf" else "https://www.googleapis.com/drive/v3/files/$id?alt=media&supportsAllDrives=true"
+                val b = Net.bytes(url, h)
+                if (b.size >= 5 && String(b, 0, 5, Charsets.ISO_8859_1) == "%PDF-") return b
+            } catch (e: Exception) {
+                // Lanjut ke cara web cookies jika OAuth gagal
+            }
+        }
+
+        // 2. Coba unduh menggunakan sesi Google (CookieManager / Web Login)
+        val cookies = CookieManager.getInstance().getCookie("https://drive.google.com") ?: c.prefs().str("gCookies")
+        val headers = mutableMapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
+            "Referer" to "https://drive.google.com/"
+        )
+        if (cookies.isNotBlank()) {
+            headers["Cookie"] = cookies
+        }
+
+        val candidateUrls = listOf(
+            "https://drive.usercontent.google.com/download?id=$id&export=download&authuser=0",
+            "https://drive.google.com/uc?export=download&id=$id&confirm=t",
+            "https://docs.google.com/document/d/$id/export?format=pdf",
+            "https://docs.google.com/presentation/d/$id/export/pdf"
+        )
+
+        for (curUrl in candidateUrls) {
+            try {
+                val bytes = Net.bytes(curUrl, headers)
+                if (bytes.size >= 5 && String(bytes, 0, 5, Charsets.ISO_8859_1) == "%PDF-") {
+                    return bytes
+                }
+                // Jika Google memberikan halaman konfirmasi virus scan untuk file besar
+                val text = String(bytes.take(2000).toByteArray(), Charsets.UTF_8)
+                val confirmToken = Regex("confirm=([0-9A-Za-z_-]+)").find(text)?.groupValues?.get(1)
+                if (confirmToken != null) {
+                    val confirmUrl = "https://drive.google.com/uc?export=download&id=$id&confirm=$confirmToken"
+                    val bConfirm = Net.bytes(confirmUrl, headers)
+                    if (bConfirm.size >= 5 && String(bConfirm, 0, 5, Charsets.ISO_8859_1) == "%PDF-") {
+                        return bConfirm
+                    }
+                }
+            } catch (e: Exception) { }
+        }
+
+        // 3. Fallback ke unduhan publik
         try {
-            val mt = JSONObject(Net.req("https://www.googleapis.com/drive/v3/files/$id?fields=name,mimeType&supportsAllDrives=true", headers = h)).optString("mimeType")
-            val gdoc = mt.startsWith("application/vnd.google-apps")
-            if (!gdoc && mt != "application/pdf") throw Exception("berkas Drive ini bukan PDF ($mt)")
-            val url = if (gdoc) "https://www.googleapis.com/drive/v3/files/$id/export?mimeType=application/pdf" else "https://www.googleapis.com/drive/v3/files/$id?alt=media&supportsAllDrives=true"
-            return Net.bytes(url, h)
+            return publicDownload(id)
         } catch (e: Exception) {
             val m = e.message ?: ""
-            if (m.startsWith("HTTP 401") || m.startsWith("HTTP 403") || m.startsWith("HTTP 404"))
-                throw Exception("Drive menolak akses ($m). Pastikan file dibagikan ke akun Google yang kamu pakai masuk")
-            throw e
+            if (!GoogleAuth.signedIn(c)) {
+                throw Exception("File ini di Google Drive dosen. Masuk akun Google Kampus di ikon 🔑 atas agar dapat membacanya.")
+            }
+            throw Exception("Google Drive menolak akses ($m). Pastikan file dibagikan ke akun kampus @${GoogleAuth.DOMAIN}")
         }
     }
 
-    /** PDF, Slides, dan Docs di dalam satu folder Drive (butuh login Google). */
+    /** Membaca daftar berkas di dalam folder Google Drive. */
     fun folderFiles(c: Context, folderId: String): List<Att> {
-        val h = mapOf("Authorization" to "Bearer " + GoogleAuth.token(c))
+        val tok = GoogleAuth.token(c) ?: return emptyList()
+        val h = mapOf("Authorization" to "Bearer $tok")
         val q = "'$folderId' in parents and trashed=false and (mimeType='application/pdf' or mimeType='application/vnd.google-apps.presentation' or mimeType='application/vnd.google-apps.document')"
         val r = JSONObject(Net.req("https://www.googleapis.com/drive/v3/files?q=${enc(q)}&fields=${enc("files(id,name,mimeType)")}&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true", headers = h))
         val a = r.optJSONArray("files") ?: return emptyList()
-        return (0 until a.length()).map { val f = a.getJSONObject(it); Att(f.optString("name"), "https://drive.google.com/file/d/${f.getString("id")}/view") }
+        return (0 until a.length()).map {
+            val f = a.getJSONObject(it)
+            Att(f.optString("name"), "https://drive.google.com/file/d/${f.getString("id")}/view")
+        }
     }
 }
 
