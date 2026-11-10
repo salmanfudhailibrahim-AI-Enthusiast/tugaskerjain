@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg0">#070B18</color>
+    <color name="bg1">#0F172A</color>
+    <color name="bg2">#1E293B</color>
+    <color name="text">#F1F5FF</color>
+    <color name="mute">#8E9AB8</color>
+    <color name="cyan">#22D3EE</color>
+    <color name="violet">#8B5CF6</color>
+    <color name="pink">#F472B6</color>
+    <color name="green">#34D399</color>
+    <color name="amber">#FBBF24</color>
+    <color name="red">#F87171</color>
+    <color name="glass">#14FFFFFF</color>
+    <color name="edge">#2EFFFFFF</color>
+    <color name="glow_cyan">#3322D3EE</color>
+    <color name="glow_violet">#338B5CF6</color>
+</resources>
