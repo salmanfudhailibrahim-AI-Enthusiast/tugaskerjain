@@ -318,13 +318,22 @@ object Campus {
         }
         // Folder Google Drive diuraikan menjadi file-file di dalamnya (jika sudah login Google)
         val res = ArrayList<Att>()
-        for (a in out.distinctBy { it.url }) {
-            val u = a.url ?: continue
+        for (a in out.distinctBy { it.url }.take(60)) {
+            var u = a.url ?: continue
+            if (u.contains("/mod/url/view.php")) {
+                // Tautan URL Moodle: ikuti ke tujuan aslinya; buang yang bukan PDF/Drive (mis. unduhan aplikasi, video)
+                val r = try { Docs.resolve(c, u) } catch (e: Exception) { u }
+                if (r != u) {
+                    if (!(Drive.isDrive(r) || r.lowercase().substringBefore("?").endsWith(".pdf"))) continue
+                    u = r
+                }
+            }
             val fid = Drive.folderId(u)
             if (fid != null && GoogleAuth.signedIn(c)) { try { res += Drive.folderFiles(c, fid); continue } catch (e: Exception) { } }
-            res += a
+            res += Att(a.name, u)
         }
-        return res.distinctBy { it.url }.take(60)
+        val pri = Regex("^(materi|modul|slide|pertemuan|bab|rps)", RegexOption.IGNORE_CASE)
+        return res.distinctBy { it.url }.sortedBy { if (pri.containsMatchIn(it.name)) 0 else 1 }.take(60)
     }
 
     /** Laporan singkat isi halaman mata kuliah, untuk mencari tahu kenapa PDF tidak ditemukan. Tidak memuat token atau cookie. */

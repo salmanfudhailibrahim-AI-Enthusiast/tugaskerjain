@@ -191,6 +191,9 @@ class MainActivity : Activity() {
 
     private fun courses() = loadCourses(this)
 
+    /** Nama berkas dengan ikon: ☁ = Google Drive, 📄 = berkas langsung. */
+    private fun attName(a: Att): String = (if (a.url?.let { Drive.isDrive(it) } == true) "☁ " else "📄 ") + a.name
+
     /* ---------------- Tab Tugas ---------------- */
     private fun stat(n: Int, label: String, c: Int) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
@@ -280,7 +283,7 @@ class MainActivity : Activity() {
             val l = try { Campus.coursePdfs(this, k.id) } catch (e: Exception) { ui.post { toast("Gagal: ${e.message}") }; return@thread }
             ui.post {
                 if (l.isEmpty()) emptyMateri(k)
-                else AlertDialog.Builder(this).setTitle(k.name).setItems(l.map { it.name }.toTypedArray()) { _, i -> openPdf(l[i]) }
+                else AlertDialog.Builder(this).setTitle(k.name).setItems(l.map { attName(it) }.toTypedArray()) { _, i -> openPdf(l[i]) }
                     .setNegativeButton("Tutup", null).show()
             }
         }
@@ -391,7 +394,7 @@ class MainActivity : Activity() {
                 addView(LinearLayout(this@MainActivity).apply {
                     gravity = Gravity.CENTER_VERTICAL
                     addView(CheckBox(this@MainActivity).apply {
-                        text = a.name; setTextColor(Pal.text); textSize = 13f; isChecked = i in sOn
+                        text = attName(a); setTextColor(Pal.text); textSize = 13f; isChecked = i in sOn
                         setOnCheckedChangeListener { _, v -> if (v) sOn.add(i) else sOn.remove(i) }
                     }, LinearLayout.LayoutParams(0, -2, 1f))
                     addView(tv("👁", 18f).apply { setPadding(dp(10), dp(6), dp(6), dp(6)); setOnClickListener { openPdf(a) } })

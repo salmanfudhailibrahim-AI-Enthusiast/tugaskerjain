@@ -2,14 +2,17 @@ package id.pemantau.tugas
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
 import android.text.TextUtils
 import android.util.LruCache
 import android.view.Gravity
@@ -35,11 +38,21 @@ class PdfActivity : Activity() {
     private lateinit var att: Att
     private lateinit var info: TextView
     private lateinit var lv: ListView
+    private lateinit var actions: LinearLayout
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
-        val name = intent.getStringExtra("name") ?: "PDF"
-        att = Att(name, intent.getStringExtra("url"), intent.getStringExtra("uri")?.let { Uri.parse(it) })
+        var name = intent.getStringExtra("name") ?: ""
+        var uri: Uri? = intent.getStringExtra("uri")?.let { Uri.parse(it) }
+        val url = intent.getStringExtra("url")
+        if (uri == null && url == null) {
+            // Dibuka dari aplikasi lain (mis. Google Drive: Kirim salinan / Buka dengan)
+            uri = sharedUri()
+            if (uri != null && name.isBlank()) name = displayName(uri)
+        }
+        if (name.isBlank()) name = "PDF"
+        att = Att(name, url, uri)
+        actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(16), dp(24), 0); visibility = View.GONE }
         info = tv("Membuka PDF...", 14f, Pal.mute).apply { gravity = Gravity.CENTER; setPadding(0, dp(48), 0, 0) }
         lv = ListView(this).apply {
             divider = null; dividerHeight = dp(10); setPadding(dp(12), 0, dp(12), dp(24)); clipToPadding = false
@@ -53,7 +66,7 @@ class PdfActivity : Activity() {
         }
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; background = aurora()
-            addView(bar); addView(info, LinearLayout.LayoutParams(-1, -2)); addView(lv, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(bar); addView(info, LinearLayout.LayoutParams(-1, -2)); addView(actions, LinearLayout.LayoutParams(-1, -2)); addView(lv, LinearLayout.LayoutParams(-1, 0, 1f))
         })
 
         thread {
@@ -65,10 +78,30 @@ class PdfActivity : Activity() {
                 val r = PdfRenderer(d)
                 ui.post { pfd = d; renderer = r; show(r) }
             } catch (e: Exception) {
-                ui.post { info.text = "Gagal membuka PDF: ${e.message}" }
+                ui.post {
+                    info.text = "Gagal membuka PDF: ${e.message}"
+                    val u = att.url
+                    if (u != null) {
+                        actions.visibility = View.VISIBLE; actions.removeAllViews()
+                        actions.addView(gpill("🔑  Masuk dengan akun kampus") { startActivity(Intent(this, GoogleActivity::class.java)) }, LinearLayout.LayoutParams(-1, -2))
+                        actions.addView(ghost("🌐 Buka di Google Drive / browser") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+                        actions.addView(tv("Atau di aplikasi Google Drive: ⋮ → Kirim salinan → Tugas Kampus.", 12f, Pal.mute).apply { setPadding(0, dp(12), 0, 0); gravity = Gravity.CENTER })
+                    }
+                }
             }
         }
     }
+
+    @Suppress("DEPRECATION")
+    private fun sharedUri(): Uri? {
+        intent.data?.let { return it }
+        return if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+    }
+
+    private fun displayName(u: Uri): String = contentResolver.query(u, null, null, null, null)?.use { cur ->
+        val i = cur.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (cur.moveToFirst() && i >= 0) cur.getString(i) else null
+    } ?: "PDF"
 
     private fun show(r: PdfRenderer) {
         info.visibility = View.GONE; lv.visibility = View.VISIBLE

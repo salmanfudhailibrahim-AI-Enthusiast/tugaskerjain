@@ -8,17 +8,18 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.Gravity
+import android.text.InputType
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Toast
 import kotlin.concurrent.thread
 
-/** Halaman login Google. Juga menerima kembalian dari browser (id.pemantau.tugas:/oauth2redirect). */
+/** Halaman masuk akun kampus (Google). Juga menerima kembalian dari browser (id.pemantau.tugas:/oauth2redirect). */
 class GoogleActivity : Activity() {
     private val ui = Handler(Looper.getMainLooper())
     private lateinit var box: LinearLayout
     private var msg = ""
+    private var showSetup = false
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
@@ -41,7 +42,7 @@ class GoogleActivity : Activity() {
         thread {
             var err: String? = null
             try { GoogleAuth.finish(this, d) } catch (e: Exception) { err = e.message ?: "gagal" }
-            ui.post { msg = if (err == null) "✅ Berhasil terhubung. Kembali ke aplikasi dan muat ulang daftar materi." else "Gagal: $err"; draw() }
+            ui.post { msg = if (err == null) "✅ Berhasil masuk. Kembali ke aplikasi, lalu muat ulang daftar materi." else "Gagal: $err"; draw() }
         }
     }
 
@@ -50,45 +51,70 @@ class GoogleActivity : Activity() {
         Toast.makeText(this, "Disalin", Toast.LENGTH_SHORT).show()
     }
 
+    private fun go(raw: String) {
+        var e = raw.trim()
+        if (e.isNotEmpty() && !e.contains("@")) e += "@" + GoogleAuth.DOMAIN
+        if (e.isNotEmpty() && !e.endsWith("@" + GoogleAuth.DOMAIN, ignoreCase = true)) { msg = "Gunakan akun kampus yang berakhiran @${GoogleAuth.DOMAIN}."; draw(); return }
+        if (GoogleAuth.clientId(this).isBlank()) { msg = "Client ID Google belum diatur. Lengkapi bagian Pengaturan awal di bawah."; showSetup = true; draw(); return }
+        prefs().edit().putString("gHint", e).apply()
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GoogleAuth.authUrl(this, e))))
+    }
+
     private fun draw() {
         box.removeAllViews()
-        box.addView(tv("GOOGLE DRIVE", 11f, Pal.cyan, true).apply { letterSpacing = 0.25f })
-        box.addView(tv("Hubungkan akun Google", 28f, Pal.text, true).apply { setPadding(0, dp(6), 0, dp(8)) })
-        box.addView(tv("Supaya aplikasi bisa membaca PDF materi yang ditaut dosen ke Google Drive (tombol \"Lihat\" di ELITA). Aplikasi hanya meminta izin baca, tidak bisa mengubah atau menghapus file.", 14f, Pal.mute))
+        box.addView(tv("AKUN KAMPUS", 11f, Pal.cyan, true).apply { letterSpacing = 0.25f })
+        box.addView(tv("Masuk dengan Google", 28f, Pal.text, true).apply { setPadding(0, dp(6), 0, dp(8)) })
+        box.addView(tv("Materi dosen di Google Drive hanya bisa dibuka oleh akun @${GoogleAuth.DOMAIN}. Aplikasi hanya meminta izin baca, tidak bisa mengubah atau menghapus file.", 14f, Pal.mute))
 
-        box.addView(card().apply {
-            if (GoogleAuth.signedIn(this@GoogleActivity)) {
+        if (GoogleAuth.signedIn(this)) {
+            box.addView(card().apply {
                 addView(tv("✅ Terhubung", 16f, Pal.green, true))
-                addView(tv(GoogleAuth.email(this@GoogleActivity).ifBlank { "akun Google" }, 13f, Pal.mute))
-                addView(row(ghost("Keluar dari Google", Pal.red) { GoogleAuth.signOut(this@GoogleActivity); msg = ""; draw() }))
-            } else {
-                addView(tv("Belum terhubung", 16f, Pal.text, true))
-                addView(row(gpill("🔑  Masuk dengan Google") {
-                    if (GoogleAuth.clientId(this@GoogleActivity).isBlank()) { msg = "Isi Client ID dulu di bagian Pengaturan awal di bawah."; draw() }
-                    else startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GoogleAuth.authUrl(this@GoogleActivity))))
-                }.apply { textSize = 15f; setPadding(0, dp(15), 0, dp(15)) }))
+                addView(tv(GoogleAuth.email(this@GoogleActivity).ifBlank { "akun kampus" }, 13f, Pal.mute))
+                addView(row(ghost("Keluar", Pal.red) { GoogleAuth.signOut(this@GoogleActivity); msg = ""; draw() }))
+                if (msg.isNotEmpty()) addView(tv(msg, 13f, if (msg.startsWith("Gagal")) Pal.red else Pal.amber).apply { setPadding(0, dp(10), 0, 0) })
+            })
+        } else {
+            val email = field("nama@${GoogleAuth.DOMAIN}").apply {
+                setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                setText(prefs().str("gHint"))
             }
-            if (msg.isNotEmpty()) addView(tv(msg, 13f, if (msg.startsWith("Gagal")) Pal.red else Pal.amber).apply { setPadding(0, dp(10), 0, 0) })
+            box.addView(card().apply {
+                addView(tv("Masuk", 20f, Pal.text, true))
+                addView(tv("Gunakan akun kampusmu", 13f, Pal.mute).apply { setPadding(0, dp(2), 0, dp(12)) })
+                addView(email)
+                addView(row(gpill("Lanjut") { go(email.text.toString()) }.apply { textSize = 15f; setPadding(0, dp(14), 0, dp(14)) }))
+                addView(tv("Kata sandi diketik di halaman resmi Google yang terbuka di browser, bukan di aplikasi ini.", 11f, Pal.mute).apply { setPadding(0, dp(10), 0, 0) })
+                if (msg.isNotEmpty()) addView(tv(msg, 13f, if (msg.startsWith("Gagal") || msg.startsWith("Gunakan")) Pal.red else Pal.amber).apply { setPadding(0, dp(10), 0, 0) })
+            })
+        }
+
+        box.addView(card().apply {
+            addView(label("Tanpa login (tanpa setup)"))
+            addView(tv("• Buka file di aplikasi Google Drive → ⋮ → Kirim salinan → pilih Tugas Kampus. PDF langsung terbuka dan bisa diringkas.\n• Atau di AI Studio pakai tombol \"PDF dari HP\"; pemilih file Android menampilkan Google Drive-mu.", 13f, Pal.text))
         })
 
-        val cidField = field("xxxx.apps.googleusercontent.com").apply { setText(GoogleAuth.clientId(this@GoogleActivity)); setSingleLine() }
-        val sha = try { GoogleAuth.sha1(this) } catch (e: Exception) { "(tidak terbaca)" }
-        box.addView(card().apply {
-            addView(label("Pengaturan awal (sekali saja)"))
-            addView(tv("1. Buka Google Cloud Console, buat proyek baru.\n2. APIs & Services → Library → aktifkan \"Google Drive API\".\n3. OAuth consent screen → External → isi nama aplikasi → tambahkan emailmu di \"Test users\".\n4. Credentials → Create credentials → OAuth client ID → tipe Android. Isi Package name dan SHA-1 persis seperti di bawah. Di Advanced settings, aktifkan \"Enable custom URI scheme\".\n5. Salin Client ID, tempel di bawah, lalu Simpan.", 13f, Pal.text))
-            addView(row(ghost("Buka Google Cloud Console") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.cloud.google.com/apis/credentials"))) }))
-            addView(label("Package name").apply { setPadding(0, dp(14), 0, dp(4)) })
-            addView(tv(packageName, 13f, Pal.cyan).apply { setTextIsSelectable(true) })
-            addView(label("SHA-1").apply { setPadding(0, dp(12), 0, dp(4)) })
-            addView(tv(sha, 12f, Pal.cyan).apply { setTextIsSelectable(true) })
-            addView(row(ghost("Salin SHA-1") { copy("sha1", sha) }, ghost("Salin package") { copy("package", packageName) }))
-            addView(label("Client ID").apply { setPadding(0, dp(14), 0, dp(4)) })
-            addView(cidField)
-            addView(row(gpill("Simpan Client ID") {
-                prefs().edit().putString("gClient", cidField.text.toString().trim()).apply()
-                msg = "Client ID tersimpan."; draw()
-            }))
-        })
-        box.addView(tv("Tanpa login pun, file Drive yang dibagikan ke \"siapa saja yang memiliki link\" tetap bisa dibaca. Kamu juga bisa memilih PDF dari Google Drive lewat tombol \"PDF dari HP\" (pemilih file Android menampilkan Drive).", 12f, Pal.mute).apply { gravity = Gravity.START; setPadding(dp(4), 0, dp(4), 0) })
+        if (showSetup || GoogleAuth.clientId(this).isBlank()) {
+            val cidField = field("xxxx.apps.googleusercontent.com").apply { setText(prefs().str("gClient")); setSingleLine() }
+            val sha = try { GoogleAuth.sha1(this) } catch (e: Exception) { "(tidak terbaca)" }
+            box.addView(card().apply {
+                addView(label("Pengaturan awal (sekali saja)"))
+                addView(tv("1. Buka Google Cloud Console, buat proyek baru.\n2. APIs & Services → Library → aktifkan \"Google Drive API\".\n3. OAuth consent screen → External → isi nama aplikasi → tambahkan emailmu di \"Test users\".\n4. Credentials → Create credentials → OAuth client ID → tipe Android. Isi Package name dan SHA-1 persis seperti di bawah. Di Advanced settings, aktifkan \"Enable custom URI scheme\".\n5. Salin Client ID, tempel di bawah, lalu Simpan.", 13f, Pal.text))
+                addView(row(ghost("Buka Google Cloud Console") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.cloud.google.com/apis/credentials"))) }))
+                addView(label("Package name").apply { setPadding(0, dp(14), 0, dp(4)) })
+                addView(tv(packageName, 13f, Pal.cyan).apply { setTextIsSelectable(true) })
+                addView(label("SHA-1 (milik aplikasi ini)").apply { setPadding(0, dp(12), 0, dp(4)) })
+                addView(tv(sha, 12f, Pal.cyan).apply { setTextIsSelectable(true) })
+                addView(row(ghost("Salin SHA-1") { copy("sha1", sha) }, ghost("Salin package") { copy("package", packageName) }))
+                addView(label("Client ID").apply { setPadding(0, dp(14), 0, dp(4)) })
+                addView(cidField)
+                addView(row(gpill("Simpan Client ID") {
+                    prefs().edit().putString("gClient", cidField.text.toString().trim()).apply()
+                    msg = if (cidField.text.isNotBlank()) "Client ID tersimpan. Sekarang masukkan email kampus lalu tekan Lanjut." else "Client ID masih kosong."
+                    showSetup = false; draw()
+                }))
+            })
+        } else {
+            box.addView(ghost("⚙ Pengaturan awal / ubah Client ID") { showSetup = true; draw() }.apply { setPadding(0, dp(12), 0, dp(12)) }, LinearLayout.LayoutParams(-1, -2))
+        }
     }
 }

@@ -19,13 +19,19 @@ object GoogleAuth {
     private fun b64(b: ByteArray) = Base64.encodeToString(b, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     private fun rnd(n: Int): String { val b = ByteArray(n); SecureRandom().nextBytes(b); return b64(b) }
 
-    fun clientId(c: Context): String = c.prefs().str("gClient").trim()
+    /** Hanya akun dengan domain ini yang diterima. */
+    const val DOMAIN = "students.untidar.ac.id"
+
+    /** Isi dengan Client ID Google milikmu agar tidak perlu mengetiknya di setiap HP (Client ID bukan rahasia). */
+    const val DEFAULT_CLIENT_ID = ""
+
+    fun clientId(c: Context): String = c.prefs().str("gClient").trim().ifEmpty { DEFAULT_CLIENT_ID }
     fun redirect(c: Context): String = c.packageName + ":/oauth2redirect"
     fun signedIn(c: Context): Boolean = c.prefs().str("gRefresh").isNotEmpty()
     fun email(c: Context): String = c.prefs().str("gEmail")
 
     /** Alamat halaman login Google yang dibuka di browser. */
-    fun authUrl(c: Context): String {
+    fun authUrl(c: Context, hint: String = ""): String {
         val ver = rnd(48); val st = rnd(16)
         c.prefs().edit().putString("gVerifier", ver).putString("gState", st).apply()
         val challenge = b64(MessageDigest.getInstance("SHA-256").digest(ver.toByteArray(Charsets.US_ASCII)))
@@ -39,6 +45,8 @@ object GoogleAuth {
             .appendQueryParameter("state", st)
             .appendQueryParameter("access_type", "offline")
             .appendQueryParameter("prompt", "consent")
+            .appendQueryParameter("hd", DOMAIN)
+            .apply { if (hint.isNotBlank()) appendQueryParameter("login_hint", hint) }
             .build().toString()
     }
 
@@ -52,6 +60,11 @@ object GoogleAuth {
         val body = "client_id=${enc(clientId(c))}&code=${enc(code)}&code_verifier=${enc(p.str("gVerifier"))}&grant_type=authorization_code&redirect_uri=${enc(redirect(c))}"
         save(c, JSONObject(Net.req(TOKEN, "POST", body, FORM)))
         p.edit().remove("gVerifier").remove("gState").apply()
+        val em = email(c)
+        if (!em.endsWith("@$DOMAIN", ignoreCase = true)) {
+            signOut(c)
+            throw Exception("akun ${em.ifBlank { "tadi" }} bukan @$DOMAIN. Masuk dengan akun kampusmu")
+        }
     }
 
     private fun save(c: Context, r: JSONObject) {
@@ -107,7 +120,8 @@ object Drive {
     fun download(c: Context, u: String): ByteArray {
         val id = fileId(u) ?: throw Exception(if (folderId(u) != null) "ini folder Drive: hubungkan akun Google lalu muat ulang daftar materi" else "tautan Drive tidak dikenali")
         if (!GoogleAuth.signedIn(c)) return publicDownload(id)
-        val h = mapOf("Authorization" to "Bearer " + GoogleAuth.token(c))
+        val key = Regex("resourcekey=([^&#]+)").find(u)?.groupValues?.get(1)
+        val h = mapOf("Authorization" to "Bearer " + GoogleAuth.token(c)) + (if (key != null) mapOf("X-Goog-Drive-Resource-Keys" to "$id/$key") else emptyMap())
         try {
             val mt = JSONObject(Net.req("https://www.googleapis.com/drive/v3/files/$id?fields=name,mimeType&supportsAllDrives=true", headers = h)).optString("mimeType")
             val gdoc = mt.startsWith("application/vnd.google-apps")
