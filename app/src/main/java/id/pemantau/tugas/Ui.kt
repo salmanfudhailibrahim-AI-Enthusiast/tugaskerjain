@@ -37,6 +37,7 @@ object Pal {
     val red = 0xFFF87171.toInt()
     val glass = 0x14FFFFFF
     val edge = 0x2EFFFFFF
+    val edgeStrong = 0x55FFFFFF
     val glowCyan = 0x3322D3EE
     val glowViolet = 0x338B5CF6
 }

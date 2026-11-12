@@ -598,7 +598,7 @@ class MainActivity : Activity() {
     private fun runAi(t: Task) {
         val dlg = AlertDialog.Builder(this).setTitle(t.title).setMessage("Meringkas...").show()
         thread {
-            val out = try { AI.run(this, t) } catch (e: Exception) { "Gagal: ${e.message}" }
+            val out = try { AI.run(this, t, false, "") } catch (e: Exception) { "Gagal: ${e.message}" }
             ui.post { dlg.dismiss(); showText("Ringkasan", out) }
         }
     }

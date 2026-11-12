@@ -1,6 +1,7 @@
 package id.pemantau.tugas
 
 import android.content.Context
+import android.webkit.CookieManager
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -65,14 +66,36 @@ object GoogleAuth {
         e.apply()
     }
 
-    /** Token akses yang masih berlaku (diperbarui otomatis). */
+    /** Token akses yang masih berlaku (diperbarui otomatis). Web session pakai cookie. */
     fun token(c: Context): String {
         val p = c.prefs()
         if (p.str("gRefresh").isEmpty()) throw Exception("belum masuk Google. Buka Pengaturan lalu pilih Hubungkan Google Drive")
+        // Mode web-session: tidak ada OAuth token, pakai cookie browser
+        if (p.str("gRefresh") == "web-session") return "web-session"
         if (p.str("gAccess").isNotEmpty() && System.currentTimeMillis() < p.getLong("gExp", 0) - 60000) return p.str("gAccess")
-        val r = JSONObject(Net.req(TOKEN, "POST", "client_id=${enc(clientId(c))}&refresh_token=${enc(p.str("gRefresh"))}&grant_type=refresh_token", FORM))
+        val cid = clientId(c)
+        if (cid.isBlank()) throw Exception("Client ID belum diisi dan sesi web sudah kedaluwarsa. Login ulang lewat ikon 🔑")
+        val r = JSONObject(Net.req(TOKEN, "POST", "client_id=${enc(cid)}&refresh_token=${enc(p.str("gRefresh"))}&grant_type=refresh_token", FORM))
         save(c, r)
         return r.getString("access_token")
+    }
+
+    /** Simpan sesi login Google dari WebView (cookie-based, tanpa OAuth/Client ID). */
+    fun saveWebSession(c: Context) {
+        val cm = CookieManager.getInstance()
+        val ckAcc = cm.getCookie("https://accounts.google.com") ?: ""
+        val ckDrive = cm.getCookie("https://drive.google.com") ?: ""
+        val allCookies = "$ckAcc; $ckDrive"
+
+        val hasSID = allCookies.contains("SID=") || allCookies.contains("SAPISID=") ||
+                allCookies.contains("__Secure-1PSID=") || allCookies.contains("__Secure-3PSID=")
+        if (hasSID) {
+            c.prefs().edit()
+                .putString("gRefresh", "web-session")
+                .putString("gAccess", "web-session")
+                .putLong("gExp", System.currentTimeMillis() + 365L * 86400000L)
+                .apply()
+        }
     }
 
     fun signOut(c: Context) {
@@ -107,7 +130,16 @@ object Drive {
     fun download(c: Context, u: String): ByteArray {
         val id = fileId(u) ?: throw Exception(if (folderId(u) != null) "ini folder Drive: hubungkan akun Google lalu muat ulang daftar materi" else "tautan Drive tidak dikenali")
         if (!GoogleAuth.signedIn(c)) return publicDownload(id)
-        val h = mapOf("Authorization" to "Bearer " + GoogleAuth.token(c))
+        val tk = GoogleAuth.token(c)
+        if (tk == "web-session") {
+            // Unduh dengan cookie dari WebView
+            val cm = CookieManager.getInstance()
+            val ck = cm.getCookie("https://drive.google.com") ?: cm.getCookie("https://accounts.google.com") ?: ""
+            val h = if (ck.isNotEmpty()) mapOf("Cookie" to ck) else emptyMap()
+            val url = "https://drive.google.com/uc?export=download&id=$id"
+            try { return Net.bytes(url, h) } catch (e: Exception) { return publicDownload(id) }
+        }
+        val h = mapOf("Authorization" to "Bearer $tk")
         try {
             val mt = JSONObject(Net.req("https://www.googleapis.com/drive/v3/files/$id?fields=name,mimeType&supportsAllDrives=true", headers = h)).optString("mimeType")
             val gdoc = mt.startsWith("application/vnd.google-apps")
@@ -124,7 +156,12 @@ object Drive {
 
     /** PDF, Slides, dan Docs di dalam satu folder Drive (butuh login Google). */
     fun folderFiles(c: Context, folderId: String): List<Att> {
-        val h = mapOf("Authorization" to "Bearer " + GoogleAuth.token(c))
+        val tk = GoogleAuth.token(c)
+        val h = if (tk == "web-session") {
+            val cm = CookieManager.getInstance()
+            val ck = cm.getCookie("https://www.googleapis.com") ?: cm.getCookie("https://accounts.google.com") ?: ""
+            mapOf("Cookie" to ck)
+        } else mapOf("Authorization" to "Bearer $tk")
         val q = "'$folderId' in parents and trashed=false and (mimeType='application/pdf' or mimeType='application/vnd.google-apps.presentation' or mimeType='application/vnd.google-apps.document')"
         val r = JSONObject(Net.req("https://www.googleapis.com/drive/v3/files?q=${enc(q)}&fields=${enc("files(id,name,mimeType)")}&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true", headers = h))
         val a = r.optJSONArray("files") ?: return emptyList()
