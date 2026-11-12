@@ -10,6 +10,9 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Base64
 import android.webkit.CookieManager
+import android.webkit.WebView
+import android.os.Handler
+import android.os.Looper
 import android.webkit.WebSettings
 import androidx.work.*
 import org.json.JSONArray
@@ -313,9 +316,12 @@ object Net {
 
 /* ---------- Ambil tugas memakai sesi login WebView ---------- */
 object Campus {
-    private fun moodleCookie(base: String): List<Task> {
+    private fun moodleCookie(c: Context, base: String): List<Task> {
         val h = mapOf("Cookie" to Net.cookie(base))
-        val html = Net.req("$base/my/", headers = h)
+        var html = try { Net.req("$base/my/", headers = h) } catch (e: Exception) { "" }
+        if (html.isBlank() || html.contains("Just a moment") || html.contains("cf-mitigated") || html.contains("<!DOCTYPE")) {
+            html = WebEngine.getHtml(c, "$base/my/")
+        }
         val key = Regex("""["']sesskey["']\s*[:=]\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1) ?: throw Exception("Sesi login kampus belum aktif atau kedaluwarsa. Silakan tekan ikon 🔐 untuk login ulang.")
         val m = "core_calendar_get_action_events_by_timesort"
         val args = JSONObject().put("limitnum", 50).put("timesortfrom", System.currentTimeMillis() / 1000 - 7 * 86400).put("limittononsuspendedevents", true)
@@ -341,7 +347,7 @@ object Campus {
         return events(r.getJSONArray("events"))
     }
 
-    fun moodle(base: String, token: String): List<Task> = if (token.isNotBlank()) moodleToken(base, token) else moodleCookie(base)
+    fun moodle(c: Context, base: String, token: String): List<Task> = if (token.isNotBlank()) moodleToken(base, token) else moodleCookie(c, base)
 
     fun canvas(base: String): List<Task> {
         val txt = Net.req("$base/api/v1/planner/items?start_date=${java.time.Instant.now()}&per_page=50", headers = mapOf("Cookie" to Net.cookie(base))).removePrefix("while(1);")
@@ -390,7 +396,11 @@ object Campus {
             }
             return sb.toString().take(30000)
         }
-        return plain(Net.req("$base/course/view.php?id=$courseId", headers = h)).take(30000)
+        var html = try { Net.req("$base/course/view.php?id=$courseId", headers = h) } catch (e: Exception) { "" }
+        if (html.isBlank() || html.contains("Just a moment") || html.contains("cf-mitigated") || html.contains("<!DOCTYPE")) {
+            html = WebEngine.getHtml(c, "$base/course/view.php?id=$courseId")
+        }
+        return plain(html).take(30000)
     }
 
     /** Daftar mata kuliah yang diikuti (untuk pilihan di AI Studio). */
@@ -417,8 +427,16 @@ object Campus {
             }
             return out
         }
-        val html = Net.req("$base/my/", headers = h)
-        val key = Regex("\"sesskey\":\"([^\"]+)\"").find(html)?.groupValues?.get(1) ?: return out
+        var html = try { Net.req("$base/my/", headers = h) } catch (e: Exception) { "" }
+        if (html.isBlank() || html.contains("Just a moment") || html.contains("cf-mitigated") || html.contains("<!DOCTYPE")) {
+            html = WebEngine.getHtml(c, "$base/my/")
+        }
+        Regex("""href="[^"]*course/view\.php\?id=(\d+)"[^>]*>([^<]+)</a>""").findAll(html).forEach { m ->
+            val id = m.groupValues[1].toLongOrNull() ?: 0L
+            val name = m.groupValues[2].trim()
+            if (id > 0 && name.length > 2 && out.none { it.id == id }) out += Crs(id, name)
+        }
+        val key = Regex("""sesskey["']?\s*[:=]\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1) ?: return out
         val m = "core_course_get_enrolled_courses_by_timeline_classification"
         val args = JSONObject().put("classification", "all").put("limit", 0).put("offset", 0).put("sort", "fullname")
         val body = JSONArray().put(JSONObject().put("index", 0).put("methodname", m).put("args", args)).toString()
@@ -495,10 +513,19 @@ object Campus {
                 }
             }
         } else {
-            val html = Net.req("$base/course/view.php?id=$courseId", headers = h)
+            var html = try { Net.req("$base/course/view.php?id=$courseId", headers = h) } catch (e: Exception) { "" }
+            if (html.isBlank() || html.contains("Just a moment") || html.contains("cf-mitigated") || html.contains("<!DOCTYPE")) {
+                html = WebEngine.getHtml(c, "$base/course/view.php?id=$courseId")
+            }
             out += anchors(html, base)
             Regex("href=\"([^\"]*/mod/folder/view\\.php\\?id=\\d+)\"").findAll(html).map { it.groupValues[1].replace("&amp;", "&") }.distinct().take(5).forEach { fu ->
-                try { out += anchors(Net.req(fu, headers = h), base).filter { (it.url ?: "").lowercase().substringBefore("?").endsWith(".pdf") } } catch (e: Exception) { }
+                try {
+                    var fhtml = try { Net.req(fu, headers = h) } catch (e: Exception) { "" }
+                    if (fhtml.isBlank() || fhtml.contains("Just a moment") || fhtml.contains("cf-mitigated")) {
+                        fhtml = WebEngine.getHtml(c, fu)
+                    }
+                    out += anchors(fhtml, base).filter { (it.url ?: "").lowercase().substringBefore("?").endsWith(".pdf") }
+                } catch (e: Exception) { }
             }
         }
         // Folder Google Drive diuraikan menjadi file-file di dalamnya (jika sudah login Google)
@@ -548,7 +575,7 @@ object Sync {
         val p = c.prefs(); val base = p.str("baseUrl").trimEnd('/')
         if (base.isEmpty()) return "Isi URL web kampus di Pengaturan."
         return try {
-            val list = (if (p.str("platform") == "canvas") Campus.canvas(base) else Campus.moodle(base, p.str("token"))).sortedBy { it.due }
+            val list = (if (p.str("platform") == "canvas") Campus.canvas(base) else Campus.moodle(c, base, p.str("token"))).sortedBy { it.due }
             saveTasks(c, list)
             try { saveCourses(c, Campus.courses(c)) } catch (e: Exception) { }
             p.edit().putLong("lastSync", System.currentTimeMillis()).putString("error", "").apply()
@@ -721,5 +748,42 @@ object AI {
             mapOf("content-type" to "application/json", "x-api-key" to key, "anthropic-version" to "2023-06-01")))
         val a = r.getJSONArray("content")
         return (0 until a.length()).joinToString("") { a.getJSONObject(it).optString("text") }
+    }
+}
+
+object WebEngine {
+    private var webView: WebView? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    fun getHtml(context: Context, url: String, timeoutMs: Long = 18000): String {
+        if (Looper.myLooper() == Looper.getMainLooper()) return ""
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val result = StringBuilder()
+        mainHandler.post {
+            try {
+                val w = webView ?: WebView(context.applicationContext).also {
+                    it.settings.javaScriptEnabled = true
+                    it.settings.domStorageEnabled = true
+                    it.settings.userAgentString = Net.UA
+                    webView = it
+                }
+                w.webViewClient = object : android.webkit.WebViewClient() {
+                    override fun onPageFinished(view: WebView?, finishedUrl: String?) {
+                        w.evaluateJavascript("(function(){ return document.documentElement.outerHTML; })();") { htmlJson ->
+                            try {
+                                val unescaped = org.json.JSONTokener(htmlJson).nextValue().toString()
+                                if (unescaped.contains("Just a moment...") || unescaped.contains("cf-mitigated")) return@evaluateJavascript
+                                result.append(unescaped)
+                            } catch (e: Exception) { result.append(htmlJson) }
+                            latch.countDown()
+                        }
+                    }
+                    override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) { latch.countDown() }
+                }
+                w.loadUrl(url)
+            } catch (e: Exception) { latch.countDown() }
+        }
+        latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        return result.toString()
     }
 }

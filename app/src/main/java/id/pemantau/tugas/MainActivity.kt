@@ -473,10 +473,15 @@ class MainActivity : Activity() {
     }
 
     private fun emptyMateri(k: Crs) {
-        AlertDialog.Builder(this).setTitle("Masukkan PDF ke Aplikasi")
-            .setMessage("Belum ada PDF otomatis di ${k.name}.\n\nKamu bisa langsung Drag & Drop file PDF ke layar aplikasi ini, atau pilih file PDF dari HP untuk langsung dibuka di aplikasi.")
+        AlertDialog.Builder(this).setTitle("Materi ${k.name}")
+            .setMessage("Belum ada file PDF yang terdeteksi di halaman mata kuliah ${k.name}.\n\nKamu bisa membuka halaman web mata kuliah ini langsung di ELITA, atau pilih / drag file PDF dari HP.")
             .setPositiveButton("📖 Pilih PDF dari HP") { _, _ -> pickPdfToRead() }
-            .setNeutralButton("✨ Buka AI Studio") { _, _ -> openStudio(0, k.name, "") }
+            .setNeutralButton("🌐 Buka di Web ELITA") { _, _ ->
+                val base = prefs().str("baseUrl", "https://elita.untidar.ac.id").trimEnd('/')
+                startActivity(Intent(this, LoginActivity::class.java).apply {
+                    putExtra("url", "$base/course/view.php?id=${k.id}")
+                })
+            }
             .setNegativeButton("Tutup", null).show()
     }
 
