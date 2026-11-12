@@ -75,11 +75,11 @@ object Net {
     } catch (e: Exception) { "" }
 
     /** Permintaan HTTP dengan penanganan redirect aman untuk mencegah "Too many follow-up requests: 21" */
-    fun req(initialUrl: String, initialMethod: String = "GET", initialBody: String? = null, initialHeaders: Map<String, String> = emptyMap()): String {
-        var curUrl = initialUrl
-        var curMethod = initialMethod
-        var curBody = initialBody
-        var curHeaders = initialHeaders.toMutableMap()
+    fun req(url: String, method: String = "GET", body: String? = null, headers: Map<String, String> = emptyMap()): String {
+        var curUrl = url
+        var curMethod = method
+        var curBody = body
+        var curHeaders = headers.toMutableMap()
         val visited = mutableSetOf<String>()
         var redirects = 0
         val maxRedirects = 6
@@ -110,9 +110,10 @@ object Net {
             }
             curHeaders.forEach { (k, v) -> c.setRequestProperty(k, v) }
 
-            if (curBody != null && (curMethod == "POST" || curMethod == "PUT")) {
+            val b = curBody
+            if (b != null && (curMethod == "POST" || curMethod == "PUT")) {
                 c.doOutput = true
-                c.outputStream.use { it.write(curBody.toByteArray(Charsets.UTF_8)) }
+                c.outputStream.use { it.write(b.toByteArray(Charsets.UTF_8)) }
             }
 
             val code = try {
@@ -130,7 +131,7 @@ object Net {
                     val nextUrl = try { URL(URL(curUrl), loc).toString() } catch (e: Exception) { loc }
                     val low = nextUrl.lowercase()
                     if ((low.contains("/login/") || low.contains("sso.untidar.ac.id") || low.contains("auth/oauth2")) &&
-                        !initialUrl.contains("/login/") && !initialUrl.contains("sso")) {
+                        !url.contains("/login/") && !url.contains("sso")) {
                         throw Exception("Sesi login kampus telah habis atau belum masuk. Silakan tekan ikon 🔐 Login kampus.")
                     }
                     if (visited.contains(nextUrl)) {
@@ -158,9 +159,9 @@ object Net {
     }
 
     /** Unduh berkas biner (maks 15 MB) dengan penanganan redirect terkontrol. */
-    fun bytes(initialUrl: String, initialHeaders: Map<String, String> = emptyMap()): ByteArray {
-        var curUrl = initialUrl
-        var curHeaders = initialHeaders.toMutableMap()
+    fun bytes(url: String, headers: Map<String, String> = emptyMap()): ByteArray {
+        var curUrl = url
+        var curHeaders = headers.toMutableMap()
         val visited = mutableSetOf<String>()
         var redirects = 0
         val maxRedirects = 6
