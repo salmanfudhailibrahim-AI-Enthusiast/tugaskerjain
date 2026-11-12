@@ -457,7 +457,7 @@ object Campus {
             val href = m.groupValues[1].replace("&amp;", "&").trim()
             val abs = if (href.startsWith("http")) href else if (href.startsWith("/")) base + href else continue
             val low = abs.lowercase(); val path = low.substringBefore("?")
-            val ok = low.contains("/mod/resource/view.php") || low.contains("/mod/url/view.php") || path.endsWith(".pdf") ||
+            val ok = low.contains("/mod/resource/view.php") || low.contains("/mod/url/view.php") || low.contains("pluginfile.php") || path.endsWith(".pdf") ||
                 low.contains("drive.google.com") || (low.contains("docs.google.com") && !low.contains("/forms"))
             if (!ok || out.any { it.url == abs }) continue
             var name = plain(m.groupValues[2]).replace(Regex("\\s*(File|Berkas|URL|Tautan)\\s*$"), "").trim()
@@ -484,35 +484,39 @@ object Campus {
             return out
         }
         if (token.isNotBlank()) {
-            val tk = java.net.URLEncoder.encode(token, "UTF-8")
-            val f = "wstoken=$tk&wsfunction=core_course_get_contents&moodlewsrestformat=json&courseid=$courseId"
-            val r = Net.req("$base/webservice/rest/server.php", "POST", f, mapOf("Content-Type" to "application/x-www-form-urlencoded"))
-            if (r.trimStart().startsWith("{")) throw Exception("Token ditolak: ${JSONObject(r).optString("message")}")
-            val a = JSONArray(r)
-            for (i in 0 until a.length()) {
-                val s = a.getJSONObject(i)
-                out += anchors(s.optString("summary"), base)
-                val ms = s.optJSONArray("modules") ?: continue
-                for (j in 0 until ms.length()) {
-                    val m = ms.getJSONObject(j)
-                    out += anchors(m.optString("description"), base)
-                    val cs = m.optJSONArray("contents") ?: continue
-                    if (m.optString("modname") == "url") {
-                        val u = cs.optJSONObject(0)?.optString("fileurl") ?: ""
-                        val low = u.lowercase()
-                        if (low.contains("drive.google.com") || low.contains("docs.google.com") || low.substringBefore("?").endsWith(".pdf")) out += Att(m.optString("name"), u)
-                        continue
-                    }
-                    for (k in 0 until cs.length()) {
-                        val x = cs.getJSONObject(k); val fn = x.optString("filename")
-                        if (x.optString("type") == "file" && (x.optString("mimetype") == "application/pdf" || fn.endsWith(".pdf", true))) {
-                            val u = x.optString("fileurl"); val sep = if (u.contains("?")) "&" else "?"
-                            out += Att(fn.ifBlank { m.optString("name") }, u + sep + "token=" + tk)
+            try {
+                val tk = java.net.URLEncoder.encode(token, "UTF-8")
+                val f = "wstoken=$tk&wsfunction=core_course_get_contents&moodlewsrestformat=json&courseid=$courseId"
+                val r = Net.req("$base/webservice/rest/server.php", "POST", f, mapOf("Content-Type" to "application/x-www-form-urlencoded"))
+                if (!r.trimStart().startsWith("{")) {
+                    val a = JSONArray(r)
+                    for (i in 0 until a.length()) {
+                        val s = a.getJSONObject(i)
+                        out += anchors(s.optString("summary"), base)
+                        val ms = s.optJSONArray("modules") ?: continue
+                        for (j in 0 until ms.length()) {
+                            val m = ms.getJSONObject(j)
+                            out += anchors(m.optString("description"), base)
+                            val cs = m.optJSONArray("contents") ?: continue
+                            if (m.optString("modname") == "url") {
+                                val u = cs.optJSONObject(0)?.optString("fileurl") ?: ""
+                                val low = u.lowercase()
+                                if (low.contains("drive.google.com") || low.contains("docs.google.com") || low.substringBefore("?").endsWith(".pdf")) out += Att(m.optString("name"), u)
+                                continue
+                            }
+                            for (k in 0 until cs.length()) {
+                                val x = cs.getJSONObject(k); val fn = x.optString("filename")
+                                if (x.optString("type") == "file" && (x.optString("mimetype") == "application/pdf" || fn.endsWith(".pdf", true))) {
+                                    val u = x.optString("fileurl"); val sep = if (u.contains("?")) "&" else "?"
+                                    out += Att(fn.ifBlank { m.optString("name") }, u + sep + "token=" + tk)
+                                }
+                            }
                         }
                     }
                 }
-            }
-        } else {
+            } catch (_: Exception) { }
+        }
+        if (out.isEmpty()) {
             var html = try { Net.req("$base/course/view.php?id=$courseId", headers = h) } catch (e: Exception) { "" }
             if (html.isBlank() || html.contains("Just a moment") || html.contains("cf-mitigated") || html.contains("<!DOCTYPE")) {
                 html = WebEngine.getHtml(c, "$base/course/view.php?id=$courseId")
@@ -785,5 +789,119 @@ object WebEngine {
         }
         latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
         return result.toString()
+    }
+
+    /** Unduh data biner (PDF/dokumen) menggunakan engine browser WebView dengan clearance sesi Cloudflare. */
+    fun getBytes(context: Context, url: String, timeoutMs: Long = 35000): ByteArray? {
+        if (Looper.myLooper() == Looper.getMainLooper()) return null
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val byteStream = ByteArrayOutputStream()
+        var hasError = false
+        val bridgeName = "BlobBridge" + System.currentTimeMillis()
+
+        mainHandler.post {
+            try {
+                val w = webView ?: WebView(context.applicationContext).also {
+                    it.settings.javaScriptEnabled = true
+                    it.settings.domStorageEnabled = true
+                    it.settings.userAgentString = Net.UA
+                    webView = it
+                }
+
+                try {
+                    w.settings.allowUniversalAccessFromFileURLs = true
+                    w.settings.allowFileAccessFromFileURLs = true
+                } catch (_: Exception) {}
+
+                class BlobBridge {
+                    @android.webkit.JavascriptInterface
+                    fun onChunk(chunk: String, isLast: Boolean) {
+                        try {
+                            val decoded = Base64.decode(chunk, Base64.DEFAULT)
+                            synchronized(byteStream) {
+                                byteStream.write(decoded)
+                            }
+                        } catch (e: Exception) {
+                            hasError = true
+                        }
+                        if (isLast) latch.countDown()
+                    }
+
+                    @android.webkit.JavascriptInterface
+                    fun onError(msg: String) {
+                        hasError = true
+                        latch.countDown()
+                    }
+                }
+
+                w.addJavascriptInterface(BlobBridge(), bridgeName)
+
+                w.webViewClient = object : android.webkit.WebViewClient() {
+                    override fun onPageFinished(view: WebView?, finishedUrl: String?) {
+                        val js = """
+                            (function() {
+                                try {
+                                    if (document.title && document.title.indexOf('Just a moment') !== -1) return;
+                                    var targetUrl = window.location.href;
+                                    var el = document.querySelector('object[data*="pluginfile"], iframe[src*="pluginfile"], a[href*="pluginfile"], embed[src*="pluginfile"]');
+                                    if (el) {
+                                        targetUrl = el.getAttribute('data') || el.getAttribute('src') || el.getAttribute('href') || targetUrl;
+                                    }
+                                    var xhr = new XMLHttpRequest();
+                                    xhr.open('GET', targetUrl, true);
+                                    xhr.responseType = 'blob';
+                                    xhr.withCredentials = true;
+                                    xhr.onload = function() {
+                                        if (xhr.status >= 200 && xhr.status < 400) {
+                                            var reader = new FileReader();
+                                            reader.onloadend = function() {
+                                                try {
+                                                    var res = reader.result;
+                                                    if (res && res.indexOf(',') !== -1) {
+                                                        var b64 = res.split(',')[1];
+                                                        var CHUNK = 256 * 1024;
+                                                        for (var i = 0; i < b64.length; i += CHUNK) {
+                                                            var slice = b64.substring(i, i + CHUNK);
+                                                            var isLast = (i + CHUNK >= b64.length);
+                                                            if (window['$bridgeName']) window['$bridgeName'].onChunk(slice, isLast);
+                                                        }
+                                                    } else {
+                                                        if (window['$bridgeName']) window['$bridgeName'].onError('Data kosong');
+                                                    }
+                                                } catch(ex) {
+                                                    if (window['$bridgeName']) window['$bridgeName'].onError(ex.message);
+                                                }
+                                            };
+                                            reader.readAsDataURL(xhr.response);
+                                        } else {
+                                            if (window['$bridgeName']) window['$bridgeName'].onError('HTTP ' + xhr.status);
+                                        }
+                                    };
+                                    xhr.onerror = function() {
+                                        if (window['$bridgeName']) window['$bridgeName'].onError('XHR Gagal');
+                                    };
+                                    xhr.send();
+                                } catch(e) {
+                                    if (window['$bridgeName']) window['$bridgeName'].onError(e.message || 'Error');
+                                }
+                            })();
+                        """.trimIndent()
+                        w.evaluateJavascript(js, null)
+                    }
+
+                    override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                        latch.countDown()
+                    }
+                }
+
+                w.loadUrl(url)
+            } catch (e: Exception) {
+                latch.countDown()
+            }
+        }
+
+        latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        val bytes = byteStream.toByteArray()
+        return if (bytes.isNotEmpty() && !hasError) bytes else null
     }
 }

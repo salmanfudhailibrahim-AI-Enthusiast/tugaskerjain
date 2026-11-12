@@ -173,15 +173,35 @@ object Drive {
 object Docs {
     private fun cookie(c: Context) = mapOf("Cookie" to Net.cookie(c.prefs().str("baseUrl")))
 
-    /** Tautan "mod/url" Moodle diubah menjadi alamat tujuan sebenarnya (mis. Google Drive). */
+    /** Tautan "mod/url" dan "mod/resource" Moodle diubah menjadi alamat tujuan sebenarnya (mis. pluginfile atau Google Drive). */
     fun resolve(c: Context, u0: String): String {
-        if (!u0.contains("/mod/url/view.php")) return u0
         val base = c.prefs().str("baseUrl").trimEnd('/')
-        val withRedirect = if (u0.contains("redirect=")) u0 else u0 + (if (u0.contains("?")) "&" else "?") + "redirect=1"
-        val loc = Net.location(withRedirect, cookie(c))
-        if (loc != null) return loc
-        val html = Net.req(u0, headers = cookie(c))
-        return Regex("<a[^>]+href=\"(https?://[^\"]+)\"").findAll(html).map { it.groupValues[1].replace("&amp;", "&") }.firstOrNull { !it.startsWith(base) } ?: u0
+        val ck = cookie(c)
+        var u = u0
+
+        if (u.contains("/mod/url/view.php")) {
+            val withRedirect = if (u.contains("redirect=")) u else u + (if (u.contains("?")) "&" else "?") + "redirect=1"
+            val loc = Net.location(withRedirect, ck)
+            if (loc != null) return loc
+            val html = try { Net.req(u, headers = ck) } catch (_: Exception) { "" }
+            return Regex("<a[^>]+href=\"(https?://[^\"]+)\"").findAll(html).map { it.groupValues[1].replace("&amp;", "&") }.firstOrNull { !it.startsWith(base) } ?: u
+        }
+
+        if (u.contains("/mod/resource/view.php")) {
+            val loc = Net.location(u, ck)
+            if (loc != null && loc.contains("pluginfile.php")) return loc
+            var html = try { Net.req(u, headers = ck) } catch (_: Exception) { "" }
+            if (html.isBlank() || html.contains("Just a moment") || html.contains("cf-mitigated")) {
+                html = WebEngine.getHtml(c, u)
+            }
+            val match = Regex("""(?:src|data|href)=["']([^"']*pluginfile\.php[^"']*)["']""").find(html)
+            if (match != null) {
+                var found = match.groupValues[1].replace("&amp;", "&")
+                if (found.startsWith("/")) found = base + found
+                return found
+            }
+        }
+        return u
     }
 
     fun bytes(c: Context, a: Att): ByteArray {
@@ -189,6 +209,21 @@ object Docs {
         val u = resolve(c, a.url!!)
         if (Drive.isDrive(u)) return Drive.download(c, u)
         val base = c.prefs().str("baseUrl").trimEnd('/')
-        return Net.bytes(u, if (base.isNotEmpty() && u.startsWith(base)) cookie(c) else emptyMap())
+        val ck = if (base.isNotEmpty() && u.startsWith(base)) cookie(c) else emptyMap()
+
+        // 1. Coba download langsung via Net.bytes
+        val res = try { Net.bytes(u, ck) } catch (e: Exception) { ByteArray(0) }
+        val isPdf = res.size >= 5 && String(res, 0, 5, Charsets.ISO_8859_1) == "%PDF-"
+        if (isPdf) return res
+
+        // 2. Jika bukan PDF valid dan URL berada di Moodle kampus, gunakan WebEngine dengan sesi WebView browser
+        if (base.isNotEmpty() && (u.startsWith(base) || a.url!!.startsWith(base))) {
+            val target = if (u.contains("pluginfile.php")) u else a.url!!
+            val webBytes = WebEngine.getBytes(c, target)
+            if (webBytes != null && webBytes.size >= 5 && String(webBytes, 0, 5, Charsets.ISO_8859_1) == "%PDF-") {
+                return webBytes
+            }
+        }
+        return res
     }
 }

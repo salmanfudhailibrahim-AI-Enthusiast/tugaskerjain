@@ -8,6 +8,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -16,6 +17,7 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.InputType
+import android.text.TextUtils
 import android.view.DragEvent
 import android.view.Gravity
 import android.view.View
@@ -459,11 +461,185 @@ class MainActivity : Activity() {
             val l = try { Campus.coursePdfs(this, k.id) } catch (e: Exception) { ui.post { toast(cleanError(e.message)) }; return@thread }
             ui.post {
                 val combined = l + picked
-                if (combined.isEmpty()) emptyMateri(k)
-                else AlertDialog.Builder(this).setTitle(k.name)
-                    .setItems(combined.map { attName(it) }.toTypedArray()) { _, i -> openAtt(combined[i]) }
-                    .setPositiveButton("📥 Pilih / Drag PDF") { _, _ -> pickPdfToRead() }
-                    .setNegativeButton("Tutup", null).show()
+                if (combined.isEmpty()) { emptyMateri(k); return@post }
+
+                val d = AlertDialog.Builder(this).create()
+                val root = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = shape(Pal.bg1, 22, Pal.edge)
+                    setPadding(dp(18), dp(20), dp(18), dp(16))
+                }
+
+                // Header Dialog
+                val headerRow = LinearLayout(this).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        addView(chip("📚 MATERI KULIAH", Pal.rose))
+                        addView(tv(k.name, 16f, Pal.text, true).apply {
+                            setPadding(0, dp(6), 0, dp(2))
+                            maxLines = 2
+                            ellipsize = TextUtils.TruncateAt.END
+                        })
+                        addView(tv("${combined.size} materi ditemukan • Pilih untuk membuka", 12f, Pal.mute))
+                    }, LinearLayout.LayoutParams(0, -2, 1f))
+
+                    val closeBtn = TextView(this@MainActivity).apply {
+                        text = "✕"
+                        textSize = 15f
+                        setTextColor(Pal.mute)
+                        gravity = Gravity.CENTER
+                        background = shape(Pal.bg2, 14, Pal.edge)
+                        setPadding(dp(10), dp(6), dp(10), dp(6))
+                        setOnClickListener { d.dismiss() }
+                    }
+                    addView(closeBtn)
+                }
+                root.addView(headerRow)
+
+                // Garis pemisah
+                root.addView(View(this).apply {
+                    setBackgroundColor(Pal.edge)
+                    layoutParams = LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(0, dp(12), 0, dp(10)) }
+                })
+
+                // Daftar Kartu Materi dalam ScrollView
+                val scroll = ScrollView(this).apply {
+                    isFillViewport = true
+                }
+                val itemList = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                }
+
+                combined.forEach { item ->
+                    val isLocal = item.uri != null
+                    val u = item.url ?: ""
+                    val isDrive = Drive.isDrive(u)
+                    val isDirectPdf = u.lowercase().contains(".pdf") || u.contains("pluginfile.php")
+                    val isResource = u.contains("/mod/resource/")
+
+                    val badgeText = when {
+                        isLocal -> "File HP"
+                        isDrive -> "Google Drive"
+                        isDirectPdf -> "Dokumen PDF"
+                        isResource -> "Materi ELITA"
+                        else -> "Tautan Web"
+                    }
+                    val badgeColor = when {
+                        isLocal -> Pal.rose
+                        isDrive -> Pal.amber
+                        isDirectPdf -> Pal.rose
+                        isResource -> Pal.burgundyLight
+                        else -> Pal.mute
+                    }
+                    val iconSymbol = when {
+                        isLocal -> "📱"
+                        isDrive -> "📁"
+                        isDirectPdf -> "📕"
+                        isResource -> "📘"
+                        else -> "🌐"
+                    }
+
+                    val itemCard = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(dp(14), dp(12), dp(14), dp(12))
+                        background = shape(Pal.bg2, 16, Pal.edge)
+                        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(10)) }
+
+                        // Baris Atas: Ikon + Nama Berkas + Badge
+                        val top = LinearLayout(this@MainActivity).apply {
+                            gravity = Gravity.CENTER_VERTICAL
+                            orientation = LinearLayout.HORIZONTAL
+                            addView(tv(iconSymbol, 16f).apply { setPadding(0, 0, dp(8), 0) })
+                            addView(tv(attName(item), 13.5f, Pal.text, true).apply {
+                                maxLines = 2
+                                ellipsize = TextUtils.TruncateAt.END
+                            }, LinearLayout.LayoutParams(0, -2, 1f))
+                            addView(chip(badgeText, badgeColor))
+                        }
+                        addView(top)
+
+                        // Baris Bawah: Tombol Aksi
+                        val actions = LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            setPadding(0, dp(10), 0, 0)
+
+                            val openBtn = TextView(this@MainActivity).apply {
+                                text = "📖 Buka PDF"
+                                textSize = 12f
+                                setTypeface(null, Typeface.BOLD)
+                                setTextColor(Color.WHITE)
+                                gravity = Gravity.CENTER
+                                background = grad(12)
+                                setPadding(dp(14), dp(7), dp(14), dp(7))
+                                setOnClickListener {
+                                    d.dismiss()
+                                    openAtt(item)
+                                }
+                            }
+                            addView(openBtn)
+
+                            if (u.isNotBlank() && (u.contains("elita.untidar.ac.id") || u.startsWith("http"))) {
+                                val webBtn = TextView(this@MainActivity).apply {
+                                    text = "🌐 Web ELITA"
+                                    textSize = 12f
+                                    setTextColor(Pal.text)
+                                    gravity = Gravity.CENTER
+                                    background = shape(Pal.bg3, 12, Pal.edge)
+                                    setPadding(dp(12), dp(7), dp(12), dp(7))
+                                    layoutParams = LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) }
+                                    setOnClickListener {
+                                        d.dismiss()
+                                        startActivity(Intent(this@MainActivity, LoginActivity::class.java).apply {
+                                            putExtra("url", u)
+                                        })
+                                    }
+                                }
+                                addView(webBtn)
+                            }
+                        }
+                        addView(actions)
+                    }
+                    itemList.addView(itemCard)
+                }
+
+                scroll.addView(itemList)
+                root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+                // Footer Tombol
+                val footer = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, dp(10), 0, 0)
+
+                    val pickBtn = ghost("📥 Pilih PDF dari HP") {
+                        d.dismiss()
+                        pickPdfToRead()
+                    }.apply {
+                        textSize = 12f
+                        setPadding(dp(10), dp(9), dp(10), dp(9))
+                    }
+                    addView(pickBtn, LinearLayout.LayoutParams(0, -2, 1f))
+
+                    val openCourseBtn = ghost("🌐 Web Kuliah") {
+                        d.dismiss()
+                        val base = prefs().str("baseUrl", "https://elita.untidar.ac.id").trimEnd('/')
+                        startActivity(Intent(this@MainActivity, LoginActivity::class.java).apply {
+                            putExtra("url", "$base/course/view.php?id=${k.id}")
+                        })
+                    }.apply {
+                        textSize = 12f
+                        setPadding(dp(10), dp(9), dp(10), dp(9))
+                        layoutParams = LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) }
+                    }
+                    addView(openCourseBtn)
+                }
+                root.addView(footer)
+
+                d.setView(root)
+                d.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                d.show()
+                d.window?.setLayout((resources.displayMetrics.widthPixels * 0.92).toInt(), (resources.displayMetrics.heightPixels * 0.75).toInt())
             }
         }
     }

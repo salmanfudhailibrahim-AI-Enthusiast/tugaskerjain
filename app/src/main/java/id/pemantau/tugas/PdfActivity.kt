@@ -440,10 +440,19 @@ class PdfActivity : Activity() {
 
         errorActions.addView(dropCard, LinearLayout.LayoutParams(-1, -2))
 
+        if (!att.url.isNullOrBlank()) {
+            val u = att.url!!
+            errorActions.addView(ghost("🌐 Buka Materi di Web ELITA") {
+                startActivity(Intent(this, LoginActivity::class.java).apply {
+                    putExtra("url", u)
+                })
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        }
+
         if (!GoogleAuth.signedIn(this)) {
             errorActions.addView(ghost("🔑 Login Akun Google (Jika File di Google Drive)") {
                 startActivity(Intent(this, GoogleActivity::class.java))
-            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
         }
     }
 
