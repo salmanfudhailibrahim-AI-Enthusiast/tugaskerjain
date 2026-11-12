@@ -68,39 +68,161 @@ fun pushNotif(c: Context, id: String, title: String, text: String) {
 }
 
 object Net {
-    fun cookie(base: String): String = CookieManager.getInstance().getCookie(base) ?: ""
-    fun req(url: String, method: String = "GET", body: String? = null, headers: Map<String, String> = emptyMap()): String {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.requestMethod = method; c.connectTimeout = 20000; c.readTimeout = 240000
-        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-        if (body != null) { c.doOutput = true; c.outputStream.use { it.write(body.toByteArray()) } }
-        val code = c.responseCode
-        val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
-        if (code >= 400) throw Exception("HTTP $code: ${text.take(200)}")
-        return text
+    const val UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+    fun cookie(base: String): String = try {
+        CookieManager.getInstance().getCookie(base) ?: ""
+    } catch (e: Exception) { "" }
+
+    /** Permintaan HTTP dengan penanganan redirect aman untuk mencegah "Too many follow-up requests: 21" */
+    fun req(initialUrl: String, initialMethod: String = "GET", initialBody: String? = null, initialHeaders: Map<String, String> = emptyMap()): String {
+        var curUrl = initialUrl
+        var curMethod = initialMethod
+        var curBody = initialBody
+        var curHeaders = initialHeaders.toMutableMap()
+        val visited = mutableSetOf<String>()
+        var redirects = 0
+        val maxRedirects = 6
+
+        while (true) {
+            if (redirects >= maxRedirects) {
+                throw Exception("Terjadi siklus pengalihan (redirect loop). Silakan masuk ulang lewat ikon 🔐 Login kampus.")
+            }
+            visited.add(curUrl)
+
+            val c = try {
+                URL(curUrl).openConnection() as HttpURLConnection
+            } catch (e: Exception) {
+                throw Exception("URL tidak valid: ${e.message}")
+            }
+
+            c.instanceFollowRedirects = false
+            c.requestMethod = curMethod
+            c.connectTimeout = 20000
+            c.readTimeout = 240000
+
+            if (!curHeaders.keys.any { it.equals("User-Agent", ignoreCase = true) }) {
+                c.setRequestProperty("User-Agent", UA)
+            }
+            val ck = cookie(curUrl)
+            if (ck.isNotEmpty() && !curHeaders.containsKey("Cookie")) {
+                c.setRequestProperty("Cookie", ck)
+            }
+            curHeaders.forEach { (k, v) -> c.setRequestProperty(k, v) }
+
+            if (curBody != null && (curMethod == "POST" || curMethod == "PUT")) {
+                c.doOutput = true
+                c.outputStream.use { it.write(curBody.toByteArray(Charsets.UTF_8)) }
+            }
+
+            val code = try {
+                c.responseCode
+            } catch (pe: java.net.ProtocolException) {
+                if (pe.message?.contains("follow-up", ignoreCase = true) == true) {
+                    throw Exception("Sesi login kampus berakhir atau terjadi pengalihan berulang. Silakan tekan ikon 🔐 untuk login.")
+                }
+                throw pe
+            }
+
+            if (code in 300..399) {
+                val loc = c.getHeaderField("Location")
+                if (!loc.isNullOrBlank()) {
+                    val nextUrl = try { URL(URL(curUrl), loc).toString() } catch (e: Exception) { loc }
+                    val low = nextUrl.lowercase()
+                    if ((low.contains("/login/") || low.contains("sso.untidar.ac.id") || low.contains("auth/oauth2")) &&
+                        !initialUrl.contains("/login/") && !initialUrl.contains("sso")) {
+                        throw Exception("Sesi login kampus telah habis atau belum masuk. Silakan tekan ikon 🔐 Login kampus.")
+                    }
+                    if (visited.contains(nextUrl)) {
+                        throw Exception("Terjadi siklus pengalihan pada web kampus. Silakan login ulang lewat ikon 🔐.")
+                    }
+                    if (code == 303 || code == 302 || code == 301) {
+                        curMethod = "GET"
+                        curBody = null
+                        curHeaders.remove("Content-Type")
+                    }
+                    val nextCookie = cookie(nextUrl)
+                    if (nextCookie.isNotEmpty()) {
+                        curHeaders["Cookie"] = nextCookie
+                    }
+                    curUrl = nextUrl
+                    redirects++
+                    continue
+                }
+            }
+
+            val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader(Charsets.UTF_8)?.readText() ?: ""
+            if (code >= 400) throw Exception("HTTP $code: ${text.take(200)}")
+            return text
+        }
     }
 
-    /** Unduh berkas biner (maks 15 MB). */
-    fun bytes(url: String, headers: Map<String, String> = emptyMap()): ByteArray {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 20000; c.readTimeout = 120000
-        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-        if (c.responseCode >= 400) throw Exception("HTTP ${c.responseCode}")
-        val out = ByteArrayOutputStream(); val buf = ByteArray(65536)
-        c.inputStream.use { ins ->
-            while (true) {
-                val n = ins.read(buf); if (n < 0) break
-                out.write(buf, 0, n)
-                if (out.size() > 15_000_000) throw Exception("lebih dari 15 MB")
+    /** Unduh berkas biner (maks 15 MB) dengan penanganan redirect terkontrol. */
+    fun bytes(initialUrl: String, initialHeaders: Map<String, String> = emptyMap()): ByteArray {
+        var curUrl = initialUrl
+        var curHeaders = initialHeaders.toMutableMap()
+        val visited = mutableSetOf<String>()
+        var redirects = 0
+        val maxRedirects = 6
+
+        while (true) {
+            if (redirects >= maxRedirects) throw Exception("Terlalu banyak pengalihan unduhan.")
+            visited.add(curUrl)
+
+            val c = URL(curUrl).openConnection() as HttpURLConnection
+            c.instanceFollowRedirects = false
+            c.connectTimeout = 20000
+            c.readTimeout = 120000
+
+            if (!curHeaders.keys.any { it.equals("User-Agent", ignoreCase = true) }) {
+                c.setRequestProperty("User-Agent", UA)
             }
+            val ck = cookie(curUrl)
+            if (ck.isNotEmpty() && !curHeaders.containsKey("Cookie")) {
+                c.setRequestProperty("Cookie", ck)
+            }
+            curHeaders.forEach { (k, v) -> c.setRequestProperty(k, v) }
+
+            val code = try {
+                c.responseCode
+            } catch (pe: java.net.ProtocolException) {
+                if (pe.message?.contains("follow-up", ignoreCase = true) == true) {
+                    throw Exception("Sesi habis saat mengunduh berkas. Silakan login ulang lewat ikon 🔐.")
+                }
+                throw pe
+            }
+
+            if (code in 300..399) {
+                val loc = c.getHeaderField("Location")
+                if (!loc.isNullOrBlank()) {
+                    val nextUrl = try { URL(URL(curUrl), loc).toString() } catch (e: Exception) { loc }
+                    if (visited.contains(nextUrl)) throw Exception("Siklus pengalihan saat mengunduh berkas.")
+                    val nextCookie = cookie(nextUrl)
+                    if (nextCookie.isNotEmpty()) curHeaders["Cookie"] = nextCookie
+                    curUrl = nextUrl
+                    redirects++
+                    continue
+                }
+            }
+
+            if (code >= 400) throw Exception("HTTP $code")
+            val out = ByteArrayOutputStream(); val buf = ByteArray(65536)
+            c.inputStream.use { ins ->
+                while (true) {
+                    val n = ins.read(buf); if (n < 0) break
+                    out.write(buf, 0, n)
+                    if (out.size() > 15_000_000) throw Exception("lebih dari 15 MB")
+                }
+            }
+            return out.toByteArray()
         }
-        return out.toByteArray()
     }
 
     /** Alamat tujuan pengalihan (302) tanpa mengikutinya; null jika tidak ada pengalihan. */
     fun location(url: String, headers: Map<String, String> = emptyMap()): String? {
         val c = URL(url).openConnection() as HttpURLConnection
         c.instanceFollowRedirects = false; c.connectTimeout = 20000; c.readTimeout = 60000
+        c.setRequestProperty("User-Agent", UA)
         headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
         val code = c.responseCode
         val loc = if (code in 300..399) c.getHeaderField("Location") else null
@@ -112,6 +234,7 @@ object Net {
         val bd = "----tk" + System.currentTimeMillis()
         val c = URL(url).openConnection() as HttpURLConnection
         c.requestMethod = "POST"; c.doOutput = true; c.connectTimeout = 20000; c.readTimeout = 240000
+        c.setRequestProperty("User-Agent", UA)
         c.setRequestProperty("Content-Type", "multipart/form-data; boundary=$bd")
         c.setChunkedStreamingMode(0)
         c.outputStream.use { o ->
@@ -120,7 +243,7 @@ object Net {
             o.write(data); o.write("\r\n--$bd--\r\n".toByteArray())
         }
         val code = c.responseCode
-        val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
+        val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader(Charsets.UTF_8)?.readText() ?: ""
         if (code >= 400) throw Exception("HTTP $code: ${text.take(200)}")
         return text
     }
@@ -131,7 +254,7 @@ object Campus {
     private fun moodleCookie(base: String): List<Task> {
         val h = mapOf("Cookie" to Net.cookie(base))
         val html = Net.req("$base/my/", headers = h)
-        val key = Regex("\"sesskey\":\"([^\"]+)\"").find(html)?.groupValues?.get(1) ?: throw Exception("Belum login. Tekan Login kampus dulu.")
+        val key = Regex("""["']sesskey["']\s*[:=]\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1) ?: throw Exception("Sesi login kampus belum aktif atau kedaluwarsa. Silakan tekan ikon 🔐 untuk login ulang.")
         val m = "core_calendar_get_action_events_by_timesort"
         val args = JSONObject().put("limitnum", 50).put("timesortfrom", System.currentTimeMillis() / 1000 - 7 * 86400).put("limittononsuspendedevents", true)
         val body = JSONArray().put(JSONObject().put("index", 0).put("methodname", m).put("args", args)).toString()
