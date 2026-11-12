@@ -59,6 +59,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        Net.init(this)
         prefs().let {
             if (!it.contains("baseUrl")) {
                 it.edit()
@@ -131,7 +132,7 @@ class MainActivity : Activity() {
                 DragEvent.ACTION_DRAG_ENTERED -> {
                     if (built) {
                         status.text = "📥 Lepaskan file PDF di sini untuk memasukkan ke aplikasi..."
-                        status.setTextColor(Pal.cyan)
+                        status.setTextColor(Pal.rose)
                     }
                     true
                 }
@@ -242,8 +243,8 @@ class MainActivity : Activity() {
     }
 
     private fun dropZoneCard(): View = card().apply {
-        background = shape(tint(Pal.cyan, 20), 18, tint(Pal.cyan, 90))
-        addView(tv("📥 Drag & Drop PDF ke Aplikasi", 14f, Pal.cyan, true))
+        background = shape(tint(Pal.burgundy, 24), 18, tint(Pal.burgundyLight, 90))
+        addView(tv("📥 Drag & Drop PDF ke Aplikasi", 14f, Pal.rose, true))
         addView(tv("Tarik (drag) file PDF langsung ke layar ini untuk membaca di dalam aplikasi atau meringkas dengan AI tanpa membuka ELITA.", 12f, Pal.mute).apply { setPadding(0, dp(4), 0, dp(8)) })
         addView(row(
             gpill("📖 Buka PDF dari HP") { pickPdfToRead() },
@@ -263,7 +264,7 @@ class MainActivity : Activity() {
         }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(72), dp(24), dp(24))
-            addView(tv("TUGAS KAMPUS", 12f, Pal.cyan, true).apply { letterSpacing = 0.25f })
+            addView(tv("TUGAS KAMPUS", 12f, Pal.rose, true).apply { letterSpacing = 0.25f })
             addView(tv("Kuliah, tapi\nlebih cerdas.", 34f, Pal.text, true).apply { setPadding(0, dp(8), 0, dp(12)) })
             addView(tv("Pantau deadline, drag & drop PDF materi, ringkas per mata kuliah, dan buat soal latihan. Semua dari satu tempat.", 15f, Pal.mute))
             addView(card().apply {
@@ -292,7 +293,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL; setPadding(dp(20), dp(40), dp(20), dp(8))
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                addView(tv("PANTAU · RINGKAS · KERJAKAN", 10f, Pal.cyan, true).apply { letterSpacing = 0.2f })
+                addView(tv("PANTAU · RINGKAS · KERJAKAN", 10f, Pal.rose, true).apply { letterSpacing = 0.2f })
                 addView(tv("Tugas Kampus", 26f, Pal.text, true))
             }, LinearLayout.LayoutParams(0, -2, 1f))
             addView(iconBtn("📄", "Buka PDF") { pickPdfToRead() })
@@ -305,7 +306,7 @@ class MainActivity : Activity() {
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(16)) }
 
         val nav = LinearLayout(this).apply {
-            background = shape(0xEE111827.toInt(), 28, Pal.edgeStrong)
+            background = shape(Pal.bg1, 28, Pal.edgeStrong)
             setPadding(dp(8), dp(6), dp(8), dp(6))
         }
 
@@ -338,8 +339,17 @@ class MainActivity : Activity() {
 
     private fun render() {
         val p = prefs(); val err = p.str("error"); val ls = p.getLong("lastSync", 0)
-        status.text = if (err.isNotEmpty()) err else if (ls > 0) "Terakhir dicek " + SimpleDateFormat("HH:mm", Locale.forLanguageTag("id-ID")).format(Date(ls)) + " · Bisa Drag & Drop PDF ke layar" else "Tekan 🔐 login ELITA, 🔑 login Google, atau Drag & Drop PDF langsung ke sini."
-        status.setTextColor(if (err.isNotEmpty()) Pal.red else Pal.mute)
+        val cleanErr = cleanError(err)
+        status.text = if (cleanErr.isNotEmpty()) cleanErr else if (ls > 0) "Terakhir dicek " + SimpleDateFormat("HH:mm", Locale.forLanguageTag("id-ID")).format(Date(ls)) + " · Bisa Drag & Drop PDF ke layar" else "Tekan 🔐 login ELITA, 🔑 login Google, atau Drag & Drop PDF langsung ke sini."
+        status.setTextColor(if (cleanErr.isNotEmpty()) Pal.rose else Pal.mute)
+        if (cleanErr.isNotEmpty()) {
+            status.setOnClickListener {
+                fromLogin = true
+                startActivity(Intent(this@MainActivity, LoginActivity::class.java))
+            }
+        } else {
+            status.setOnClickListener(null)
+        }
         navViews.forEachIndexed { i, t ->
             val on = i == tab
             t.background = if (on) grad(20) else null
@@ -373,7 +383,7 @@ class MainActivity : Activity() {
         val p = prefs(); val done = p.getStringSet("done", emptySet())!!; val now = System.currentTimeMillis()
         val all = loadTasks(this); val active = all.filter { it.id !in done }
         val st = LinearLayout(this)
-        st.addView(stat(active.size, "AKTIF", Pal.cyan))
+        st.addView(stat(active.size, "AKTIF", Pal.rose))
         st.addView(stat(active.count { it.due >= now && it.due - now < 86400000L }, "< 24 JAM", Pal.amber))
         st.addView(stat(active.count { it.due < now }, "TERLAMBAT", Pal.red))
         list.addView(st, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
@@ -401,7 +411,7 @@ class MainActivity : Activity() {
             isDone -> "SELESAI" to Pal.green
             late -> "TERLAMBAT" to Pal.red
             soon -> ("SISA " + left(t.due - now).uppercase()) to Pal.amber
-            else -> (left(t.due - now).uppercase() + " LAGI") to Pal.cyan
+            else -> (left(t.due - now).uppercase() + " LAGI") to Pal.rose
         }
         val fmt = SimpleDateFormat("EEEE, d MMM HH:mm", Locale.forLanguageTag("id-ID"))
         return card().apply {
@@ -446,7 +456,7 @@ class MainActivity : Activity() {
     private fun materiDialog(k: Crs) {
         toast("Mengambil daftar materi...")
         thread {
-            val l = try { Campus.coursePdfs(this, k.id) } catch (e: Exception) { ui.post { toast("Gagal: ${e.message}") }; return@thread }
+            val l = try { Campus.coursePdfs(this, k.id) } catch (e: Exception) { ui.post { toast(cleanError(e.message)) }; return@thread }
             ui.post {
                 val combined = l + picked
                 if (combined.isEmpty()) emptyMateri(k)
@@ -557,7 +567,7 @@ class MainActivity : Activity() {
                 addView(LinearLayout(this@MainActivity).apply {
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(0, dp(6), 0, 0)
-                    addView(tv("📄 ${a.name}", 13f, Pal.cyan).apply {
+                    addView(tv("📄 ${a.name}", 13f, Pal.rose).apply {
                         setOnClickListener { openAtt(a) }
                     }, LinearLayout.LayoutParams(0, -2, 1f))
                     addView(tv("👁 Baca", 12f, Pal.text).apply {
@@ -590,7 +600,7 @@ class MainActivity : Activity() {
     private fun runCourse(title: String, course: String, cid: Long, quiz: Boolean, topic: String, pasted: String, atts: List<Att>) {
         val dlg = AlertDialog.Builder(this).setTitle(title).setMessage("Membaca materi dan PDF, lalu menyusun hasil...").show()
         thread {
-            val out = try { AI.course(this, course, cid, quiz, topic, pasted, atts) } catch (e: Exception) { "Gagal: ${e.message}" }
+            val out = try { AI.course(this, course, cid, quiz, topic, pasted, atts) } catch (e: Exception) { "Gagal: ${cleanError(e.message)}" }
             ui.post { dlg.dismiss(); showText(title, out) }
         }
     }
@@ -598,7 +608,7 @@ class MainActivity : Activity() {
     private fun runAi(t: Task) {
         val dlg = AlertDialog.Builder(this).setTitle(t.title).setMessage("Meringkas...").show()
         thread {
-            val out = try { AI.run(this, t, false, "") } catch (e: Exception) { "Gagal: ${e.message}" }
+            val out = try { AI.run(this, t, false, "") } catch (e: Exception) { "Gagal: ${cleanError(e.message)}" }
             ui.post { dlg.dismiss(); showText("Ringkasan", out) }
         }
     }
@@ -618,7 +628,7 @@ class MainActivity : Activity() {
         val ok = CheckBox(this).apply { text = "Saya sudah meninjau jawaban ini dan siap mengumpulkan"; setTextColor(Pal.text); textSize = 13f }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0)
-            addView(tv(t.title, 14f, Pal.cyan, true).apply { setPadding(0, 0, 0, dp(8)) })
+            addView(tv(t.title, 14f, Pal.rose, true).apply { setPadding(0, 0, 0, dp(8)) })
             addView(et)
             addView(row(ghost("📎 Lampirkan / Drag file") { pickAny() }))
             addView(info); addView(ok)
@@ -640,7 +650,7 @@ class MainActivity : Activity() {
                     try { msg = Submit.send(this, t, txt, files) } catch (e: Exception) { err = e.message ?: "gagal" }
                     ui.post {
                         d.setTitle("Kumpulkan tugas")
-                        if (err != null) { b.isEnabled = ok.isChecked; toast("Gagal: $err") }
+                        if (err != null) { b.isEnabled = ok.isChecked; toast("Gagal: ${cleanError(err)}") }
                         else {
                             d.dismiss()
                             val dn = prefs().getStringSet("done", emptySet())!!.toMutableSet(); dn.add(t.id)

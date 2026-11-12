@@ -10,6 +10,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Base64
 import android.webkit.CookieManager
+import android.webkit.WebSettings
 import androidx.work.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -67,8 +68,58 @@ fun pushNotif(c: Context, id: String, title: String, text: String) {
         .setContentIntent(pi).setAutoCancel(true).build())
 }
 
+fun cleanError(raw: String?): String {
+    if (raw.isNullOrBlank()) return ""
+    val r = raw.trim()
+    val low = r.lowercase()
+    if (low.contains("follow-up") || low.contains("pengalihan berulang") || low.contains("redirect loop")) {
+        return "⚠️ Sesi kampus berakhir (pengalihan berulang). Silakan login via 🔐."
+    }
+    if (low.contains("just a moment") || low.contains("cloudflare") || low.contains("cf-mitigated") || low.contains("challenge")) {
+        return "⚠️ Proteksi Cloudflare aktif. Buka 🔐 Login Kampus untuk verifikasi."
+    }
+    if (low.contains("403")) {
+        return "⚠️ Akses kampus ditolak (HTTP 403). Buka 🔐 Login Kampus untuk verifikasi."
+    }
+    if (low.contains("401")) {
+        return "⚠️ Sesi kampus kedaluwarsa. Silakan login ulang lewat 🔐."
+    }
+    if (low.contains("<html") || low.contains("<!doctype") || low.contains("<body") || low.contains("<head")) {
+        return "⚠️ Gagal mengakses web kampus. Silakan buka 🔐 Login Kampus."
+    }
+    return plain(r).take(120).trim()
+}
+
 object Net {
-    const val UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+    var UA: String = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+    fun init(c: Context) {
+        try {
+            val def = WebSettings.getDefaultUserAgent(c)
+            if (!def.isNullOrBlank()) UA = def
+        } catch (e: Exception) {}
+    }
+
+    fun cleanHttpError(code: Int, text: String, c: HttpURLConnection? = null): String {
+        val low = text.lowercase()
+        val isCf = (code == 403 || code == 503) && (
+            low.contains("just a moment") ||
+            low.contains("challenges.cloudflare.com") ||
+            low.contains("cf-mitigated") ||
+            low.contains("cf_chl_") ||
+            c?.getHeaderField("Cf-Mitigated") != null ||
+            c?.getHeaderField("Server")?.contains("cloudflare", ignoreCase = true) == true
+        )
+        return when {
+            isCf -> "Proteksi kampus aktif (Cloudflare). Silakan buka 🔐 Login Kampus untuk verifikasi sesi."
+            code == 403 -> "Akses web kampus ditolak (HTTP 403). Silakan buka 🔐 Login Kampus untuk verifikasi."
+            code == 401 -> "Sesi login kampus berakhir (HTTP 401). Silakan masuk ulang lewat ikon 🔐."
+            code in 500..599 -> "Server kampus sedang gangguan (HTTP $code). Coba beberapa saat lagi."
+            low.contains("<html") || low.contains("<!doctype") -> "HTTP $code: Server kampus mengembalikan galat."
+            text.isNotBlank() -> "HTTP $code: ${plain(text).take(120).trim()}"
+            else -> "HTTP $code"
+        }
+    }
 
     fun cookie(base: String): String = try {
         CookieManager.getInstance().getCookie(base) ?: ""
@@ -153,7 +204,7 @@ object Net {
             }
 
             val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader(Charsets.UTF_8)?.readText() ?: ""
-            if (code >= 400) throw Exception("HTTP $code: ${text.take(200)}")
+            if (code >= 400) throw Exception(cleanHttpError(code, text, c))
             return text
         }
     }
@@ -206,7 +257,10 @@ object Net {
                 }
             }
 
-            if (code >= 400) throw Exception("HTTP $code")
+            if (code >= 400) {
+                val errText = c.errorStream?.bufferedReader(Charsets.UTF_8)?.readText() ?: ""
+                throw Exception(cleanHttpError(code, errText, c))
+            }
             val out = ByteArrayOutputStream(); val buf = ByteArray(65536)
             c.inputStream.use { ins ->
                 while (true) {
@@ -239,13 +293,20 @@ object Net {
         c.setRequestProperty("Content-Type", "multipart/form-data; boundary=$bd")
         c.setChunkedStreamingMode(0)
         c.outputStream.use { o ->
-            fields.forEach { (k, v) -> o.write("--$bd\r\nContent-Disposition: form-data; name=\"$k\"\r\n\r\n$v\r\n".toByteArray()) }
-            o.write("--$bd\r\nContent-Disposition: form-data; name=\"$fileField\"; filename=\"$fileName\"\r\nContent-Type: application/octet-stream\r\n\r\n".toByteArray())
-            o.write(data); o.write("\r\n--$bd--\r\n".toByteArray())
+            val crlf = "\r\n"
+            fields.forEach { (k, v) ->
+                val part = "--" + bd + crlf + "Content-Disposition: form-data; name=\"" + k + "\"" + crlf + crlf + v + crlf
+                o.write(part.toByteArray(Charsets.UTF_8))
+            }
+            val fPart = "--" + bd + crlf + "Content-Disposition: form-data; name=\"" + fileField + "\"; filename=\"" + fileName + "\"" + crlf + "Content-Type: application/octet-stream" + crlf + crlf
+            o.write(fPart.toByteArray(Charsets.UTF_8))
+            o.write(data)
+            val end = crlf + "--" + bd + "--" + crlf
+            o.write(end.toByteArray(Charsets.UTF_8))
         }
         val code = c.responseCode
         val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader(Charsets.UTF_8)?.readText() ?: ""
-        if (code >= 400) throw Exception("HTTP $code: ${text.take(200)}")
+        if (code >= 400) throw Exception(cleanHttpError(code, text, c))
         return text
     }
 }
@@ -493,7 +554,7 @@ object Sync {
             p.edit().putLong("lastSync", System.currentTimeMillis()).putString("error", "").apply()
             schedule(c, list); null
         } catch (e: Exception) {
-            val m = e.message ?: "Gagal sinkron"; p.edit().putString("error", m).apply(); m
+            val m = cleanError(e.message ?: "Gagal sinkron"); p.edit().putString("error", m).apply(); m
         }
     }
 

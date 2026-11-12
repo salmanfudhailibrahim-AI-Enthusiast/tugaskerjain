@@ -182,7 +182,7 @@ class PdfActivity : Activity() {
         zoomBadge = TextView(this).apply {
             text = "100%"
             textSize = 12f
-            setTextColor(Pal.cyan)
+            setTextColor(Pal.rose)
             gravity = Gravity.CENTER
             setTypeface(null, android.graphics.Typeface.BOLD)
             setPadding(dp(10), dp(6), dp(10), dp(6))
@@ -300,7 +300,7 @@ class PdfActivity : Activity() {
                 DragEvent.ACTION_DRAG_STARTED -> true
                 DragEvent.ACTION_DRAG_ENTERED -> {
                     titleView.text = "📥 Lepaskan PDF di sini..."
-                    titleView.setTextColor(Pal.cyan)
+                    titleView.setTextColor(Pal.rose)
                     true
                 }
                 DragEvent.ACTION_DRAG_EXITED -> {
@@ -340,7 +340,7 @@ class PdfActivity : Activity() {
         vScroll.visibility = View.GONE
         zoomCluster.visibility = View.GONE
         infoText.text = "Memuat PDF ke dalam aplikasi..."
-        infoText.setTextColor(Pal.cyan)
+        infoText.setTextColor(Pal.rose)
 
         thread {
             try {
@@ -412,12 +412,12 @@ class PdfActivity : Activity() {
     private fun showDropZonePrompt(msg: String) {
         loadSpinner.visibility = View.GONE
         infoText.text = "📥 Drag & Drop PDF ke Aplikasi"
-        infoText.setTextColor(Pal.cyan)
+        infoText.setTextColor(Pal.rose)
         errorActions.removeAllViews()
         errorActions.visibility = View.VISIBLE
 
         val dropCard = card().apply {
-            background = shape(tint(Pal.cyan, 24), 20, tint(Pal.cyan, 110))
+            background = shape(tint(Pal.burgundy, 24), 20, tint(Pal.burgundyLight, 110))
             setPadding(dp(20), dp(24), dp(20), dp(24))
             gravity = Gravity.CENTER
 

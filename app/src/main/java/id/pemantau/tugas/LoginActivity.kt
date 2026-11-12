@@ -31,6 +31,7 @@ class LoginActivity : Activity() {
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        Net.init(this)
         val base = prefs().str("baseUrl", "https://elita.untidar.ac.id").trimEnd('/')
         val start = prefs().str("ssoUrl", "https://sso.untidar.ac.id/Home/Login")
         val baseHost = try { Uri.parse(base).host ?: "elita.untidar.ac.id" } catch (e: Exception) { "elita.untidar.ac.id" }
@@ -83,7 +84,7 @@ class LoginActivity : Activity() {
                 if (curHost.contains("sso.untidar.ac.id") && !url.contains("Home/Login", ignoreCase = true) && !redirectedToElita) {
                     redirectedToElita = true
                     statusTv.text = "✅ Login SSO terdeteksi! Membuka ELITA..."
-                    statusTv.setTextColor(Pal.cyan)
+                    statusTv.setTextColor(Pal.rose)
                     web.loadUrl(base)
                     return
                 }
@@ -93,7 +94,7 @@ class LoginActivity : Activity() {
                     val isLoginPage = url.contains("/login/", ignoreCase = true)
                     if (!isLoginPage) {
                         statusTv.text = "✅ Berhasil masuk ELITA! Mengambil token Moodle otomatis..."
-                        statusTv.setTextColor(Pal.cyan)
+                        statusTv.setTextColor(Pal.rose)
                         triggerAutoFetchToken(web, base)
                     }
                 }
@@ -111,8 +112,13 @@ class LoginActivity : Activity() {
                 addView(statusTv)
             }, LinearLayout.LayoutParams(0, -2, 1f))
 
+            addView(ghost("ELITA") { web.loadUrl(base) }.apply {
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+            }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
+
             addView(gpill("✓ Selesai") {
                 cm.flush()
+                prefs().edit().putString("error", "").apply()
                 if (!tokenSaved) {
                     triggerAutoFetchToken(web, base)
                 }
@@ -153,9 +159,12 @@ class LoginActivity : Activity() {
         try {
             val dec = String(Base64.decode(raw, Base64.DEFAULT), Charsets.UTF_8)
             val parts = dec.split(":::")
-            if (parts.size >= 2 && Regex("^[a-f0-9]{32}$", RegexOption.IGNORE_CASE).matches(parts[1])) {
-                handleCandidateToken(parts[1])
-                return true
+            for (p in parts) {
+                val clean = p.trim()
+                if (Regex("^[a-f0-9]{32}$", RegexOption.IGNORE_CASE).matches(clean)) {
+                    handleCandidateToken(clean)
+                    return true
+                }
             }
         } catch (e: Exception) {}
 
@@ -174,7 +183,7 @@ class LoginActivity : Activity() {
         if (tokenSaved) return
         tokenSaved = true
 
-        prefs().edit().putString("token", clean).apply()
+        prefs().edit().putString("token", clean).putString("error", "").apply()
         CookieManager.getInstance().flush()
 
         statusTv.text = "✅ Berhasil! Token Moodle otomatis tersimpan."

@@ -22,24 +22,46 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
-/** Palet neon futuristik gelap dengan aksen cyan, ungu, dan pink. */
+/**
+ * Palet warna modern bertema Burgundy (Wine / Marun elegan).
+ * Bersih, sederhana, kontras tinggi, dan nyaman di mata.
+ */
 object Pal {
-    val bg0 = 0xFF070B18.toInt()
-    val bg1 = 0xFF0F172A.toInt()
-    val bg2 = 0xFF1E293B.toInt()
-    val text = 0xFFF1F5FF.toInt()
-    val mute = 0xFF8E9AB8.toInt()
-    val cyan = 0xFF22D3EE.toInt()
-    val violet = 0xFF8B5CF6.toInt()
-    val pink = 0xFFF472B6.toInt()
-    val green = 0xFF34D399.toInt()
-    val amber = 0xFFFBBF24.toInt()
-    val red = 0xFFF87171.toInt()
-    val glass = 0x14FFFFFF
-    val edge = 0x2EFFFFFF
-    val edgeStrong = 0x55FFFFFF
-    val glowCyan = 0x3322D3EE
-    val glowViolet = 0x338B5CF6
+    // Backgrounds - Nuansa burgundy beludru pekat
+    val bg0 = 0xFF120407.toInt()        // Latar dasar (hitam-burgundy pekat)
+    val bg1 = 0xFF1B070C.toInt()        // Latar kontainer / scaffold
+    val bg2 = 0xFF280B13.toInt()        // Permukaan kartu (deep burgundy velvet)
+    val bg3 = 0xFF3D121F.toInt()        // Permukaan tombol/input elevated
+    val cardBg = 0xFA280B13.toInt()
+
+    // Teks
+    val text = 0xFFFDF2F4.toInt()       // Teks putih hangat bersih
+    val mute = 0xFFA68890.toInt()       // Teks sekunder abu-abu mauve hangat
+    val faint = 0xFF6E5259.toInt()      // Garis atau hint redup
+
+    // Aksen Utama Burgundy & Rose
+    val burgundy = 0xFF881337.toInt()   // Burgundy murni (merah anggur marun)
+    val burgundyDark = 0xFF540C20.toInt()
+    val burgundyLight = 0xFFBE123C.toInt() // Rose-burgundy modern untuk tombol & tab aktif
+    val rose = 0xFFFB7185.toInt()       // Rose lembut untuk penanda
+    val wine = 0xFF6B0E27.toInt()
+
+    // Status & kontras (kompatibilitas dengan seluruh codebase)
+    val cyan = 0xFFFB7185.toInt()       // Dipetakan ke rose-burgundy
+    val violet = 0xFFBE123C.toInt()     // Dipetakan ke burgundyLight
+    val pink = 0xFFFB7185.toInt()       // Pink-rose aksen
+    val green = 0xFF10B981.toInt()      // Hijau mint (selesai / sukses)
+    val amber = 0xFFF59E0B.toInt()      // Kuning emas / peringatan / < 24 jam
+    val red = 0xFFF43F5E.toInt()        // Merah rose terang untuk terlambat / error
+    val gold = 0xFFFBBF24.toInt()       // Emas hangat (kombinasi klasik dengan burgundy)
+
+    // Border & Efek Kaca
+    val glass = 0x1AFB7185.toInt()      // Kaca transparan bersaput rose tipis
+    val edge = 0x2EBE123C.toInt()       // Border burgundy halus
+    val edgeStrong = 0x5EBE123C.toInt() // Border burgundy tegas
+    val glowBurgundy = 0x44881337.toInt()
+    val glowCyan = 0x33BE123C.toInt()
+    val glowViolet = 0x33BE123C.toInt()
 }
 
 fun tint(c: Int, a: Int) = Color.argb(a, Color.red(c), Color.green(c), Color.blue(c))
@@ -49,73 +71,78 @@ fun Context.shape(fill: Int, r: Int = 16, stroke: Int = 0, strokeW: Int = 1) = G
     if (stroke != 0) setStroke(dp(strokeW), stroke)
 }
 
-/** Gradien horizontal cyan-ke-ungu. */
-fun Context.grad(r: Int = 20, c1: Int = Pal.cyan, c2: Int = Pal.violet) =
+/** Gradien horizontal burgundy ke rose modern. */
+fun Context.grad(r: Int = 20, c1: Int = Pal.burgundy, c2: Int = Pal.burgundyLight) =
     GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(c1, c2)).apply { cornerRadius = dp(r).toFloat() }
 
-/** Gradien vertikal ungu-ke-pink. */
-fun Context.gradVertical(r: Int = 20, c1: Int = Pal.violet, c2: Int = Pal.pink) =
+/** Gradien vertikal burgundy tua ke burgundy terang. */
+fun Context.gradVertical(r: Int = 20, c1: Int = Pal.burgundyDark, c2: Int = Pal.burgundyLight) =
     GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(c1, c2)).apply { cornerRadius = dp(r).toFloat() }
 
-/** Latar gelap dengan cahaya aurora (cyan, ungu, pink). */
+/** Latar belakang beludru burgundy aurora yang elegan. */
 fun Context.aurora(): Drawable {
     fun blob(c: Int, cx: Float, cy: Float, r: Int) = GradientDrawable().apply {
         setGradientType(GradientDrawable.RADIAL_GRADIENT)
         setGradientCenter(cx, cy)
         setGradientRadius(dp(r).toFloat())
-        setColors(intArrayOf(tint(c, 95), tint(c, 0)))
+        setColors(intArrayOf(tint(c, 90), tint(c, 0)))
     }
-    return LayerDrawable(arrayOf(ColorDrawable(Pal.bg0), blob(Pal.cyan, 0.05f, 0.0f, 360), blob(Pal.violet, 1.0f, 0.55f, 420), blob(Pal.pink, 0.1f, 1.0f, 300)))
+    return LayerDrawable(arrayOf(
+        ColorDrawable(Pal.bg0),
+        blob(Pal.burgundy, 0.85f, 0.05f, 380),
+        blob(Pal.burgundyLight, 0.15f, 0.75f, 360),
+        blob(Pal.burgundyDark, 0.5f, 0.4f, 420)
+    ))
 }
 
 fun Context.tv(s: String, sz: Float = 14f, color: Int = Pal.text, bold: Boolean = false) = TextView(this).apply {
     text = s; textSize = sz; setTextColor(color); if (bold) setTypeface(null, Typeface.BOLD)
 }
 
-fun Context.label(s: String) = tv(s.uppercase(), 11f, Pal.cyan, true).apply { letterSpacing = 0.14f; setPadding(0, 0, 0, dp(6)) }
+fun Context.label(s: String) = tv(s.uppercase(), 11f, Pal.rose, true).apply { letterSpacing = 0.12f; setPadding(0, 0, 0, dp(6)) }
 
 fun Context.pill(t: String, fill: Int, fg: Int, f: () -> Unit) = TextView(this).apply {
     text = t; setTextColor(fg); textSize = 13f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD)
-    setPadding(dp(10), dp(12), dp(10), dp(12)); background = shape(fill, 20); setOnClickListener { f() }
+    setPadding(dp(12), dp(10), dp(12), dp(10)); background = shape(fill, 16); setOnClickListener { f() }
 }
 
-/** Tombol utama bergradien dengan efek glow tipis. */
+/** Tombol utama dengan gradien burgundy modern. */
 fun Context.gpill(t: String, f: () -> Unit) = TextView(this).apply {
     text = t; setTextColor(Color.WHITE); textSize = 13f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD)
-    setPadding(dp(10), dp(12), dp(10), dp(12))
+    setPadding(dp(14), dp(11), dp(14), dp(11))
     background = LayerDrawable(arrayOf(
-        shape(Pal.glowCyan, 20),
-        grad(20)
+        shape(Pal.glowBurgundy, 16),
+        grad(16)
     )).apply { setLayerInset(1, dp(1), dp(1), dp(1), dp(1)) }
     setOnClickListener { f() }
 }
 
-/** Tombol sekunder berkaca dengan border tipis. */
+/** Tombol sekunder dengan latar gelap burgundy halus dan border tipis. */
 fun Context.ghost(t: String, fg: Int = Pal.text, f: () -> Unit) = TextView(this).apply {
     text = t; setTextColor(fg); textSize = 12f; gravity = Gravity.CENTER; setTypeface(null, Typeface.BOLD)
-    setPadding(dp(8), dp(12), dp(8), dp(12)); background = shape(Pal.glass, 20, Pal.edge); setOnClickListener { f() }
+    setPadding(dp(12), dp(10), dp(12), dp(10)); background = shape(Pal.bg3, 16, Pal.edge); setOnClickListener { f() }
 }
 
 /** Chip status dengan warna dinamis. */
 fun Context.chip(s: String, c: Int) = TextView(this).apply {
     text = s; textSize = 11f; setTextColor(c); setTypeface(null, Typeface.BOLD)
-    setPadding(dp(10), dp(5), dp(10), dp(5)); background = shape(tint(c, 45), 12)
+    setPadding(dp(10), dp(4), dp(10), dp(4)); background = shape(tint(c, 38), 10)
 }
 
-/** Kartu kaca futuristik dengan border glow halus. */
+/** Kartu modern bertema burgundy dengan border halus. */
 fun Context.card() = LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
-    setPadding(dp(18), dp(16), dp(18), dp(16))
-    background = shape(Pal.glass, 24, Pal.edge)
-    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(12)) }
+    setPadding(dp(16), dp(14), dp(16), dp(14))
+    background = shape(Pal.bg2, 18, Pal.edge)
+    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(10)) }
 }
 
-/** Kartu dengan border glow berwarna. */
+/** Kartu dengan border berwarna aksen. */
 fun Context.glowCard(borderColor: Int) = LinearLayout(this).apply {
     orientation = LinearLayout.VERTICAL
-    setPadding(dp(18), dp(16), dp(18), dp(16))
-    background = shape(tint(borderColor, 25), 24, borderColor)
-    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(12)) }
+    setPadding(dp(16), dp(14), dp(16), dp(14))
+    background = shape(Pal.bg2, 18, borderColor)
+    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(10)) }
 }
 
 fun Context.row(vararg v: View) = LinearLayout(this).apply {
@@ -125,7 +152,7 @@ fun Context.row(vararg v: View) = LinearLayout(this).apply {
 
 fun Context.field(h: String) = EditText(this).apply {
     hint = h; setHintTextColor(Pal.mute); setTextColor(Pal.text); textSize = 14f
-    background = shape(tint(Color.WHITE, 18), 14, Pal.edge); setPadding(dp(14), dp(12), dp(14), dp(12))
+    background = shape(Pal.bg3, 14, Pal.edge); setPadding(dp(14), dp(12), dp(14), dp(12))
 }
 
 fun EditText.onText(f: (String) -> Unit) {

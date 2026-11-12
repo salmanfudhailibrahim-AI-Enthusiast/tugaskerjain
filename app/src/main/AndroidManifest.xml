@@ -20,6 +20,12 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="tugaskerjain" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="moodlemobile" />
+            </intent-filter>
         </activity>
         <activity android:name=".PdfActivity" />
         <activity android:name=".GoogleActivity" android:exported="true" android:launchMode="singleTask">

@@ -96,7 +96,7 @@ class GoogleActivity : Activity() {
 
         webProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
-            val pg = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(Pal.cyan, Pal.violet))
+            val pg = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(Pal.burgundyLight, Pal.rose))
             progressDrawable = ClipDrawable(pg, Gravity.START, ClipDrawable.HORIZONTAL)
         }
 
@@ -218,7 +218,7 @@ class GoogleActivity : Activity() {
         val titles = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, 0, 0)
-            addView(tv("GOOGLE DRIVE", 11f, Pal.cyan, true).apply { letterSpacing = 0.2f })
+            addView(tv("GOOGLE DRIVE", 11f, Pal.rose, true).apply { letterSpacing = 0.2f })
             addView(tv("Akun Google Terhubung", 22f, Pal.text, true))
         }
         header.addView(btnBack, LinearLayout.LayoutParams(-2, -2))
